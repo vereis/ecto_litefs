@@ -9,4 +9,4 @@ config :ecto_litefs, Repo,
 
 config :ecto_litefs, ecto_repos: [Repo]
 
-config :logger, level: :warning
+config :logger, level: :debug
