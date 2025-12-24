@@ -1,0 +1,16 @@
+tags
+.elixir_ls/
+.env
+.envrc
+_build/
+erl_crash.dump
+deps/
+cover/
+apps/**/cover/
+priv/plts/
+doc/
+.direnv/
+test/test.db*
+*.ez
+ecto_litefs-*.tar
+/tmp/
