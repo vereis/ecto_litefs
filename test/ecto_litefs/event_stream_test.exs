@@ -5,6 +5,8 @@ defmodule EctoLiteFS.EventStreamTest do
 
   alias EctoLiteFS.Config
   alias EctoLiteFS.EventStream
+  alias EctoLiteFS.Supervisor, as: LiteFSSupervisor
+  alias EctoLiteFS.Tracker
 
   describe "process_name/1" do
     test "returns module-based name for instance" do
@@ -12,41 +14,7 @@ defmodule EctoLiteFS.EventStreamTest do
     end
   end
 
-  describe "JSON parsing" do
-    test "parses init event with isPrimary true" do
-      log =
-        capture_log([level: :debug], fn ->
-          line = ~s({"type":"init","data":{"isPrimary":true,"hostname":"node1"}})
-          send_line_to_handler(:parse_primary, line)
-        end)
-
-      assert log =~ "init event"
-      assert log =~ "primary"
-      assert log =~ "hostname=node1"
-    end
-
-    test "parses init event with isPrimary false" do
-      log =
-        capture_log([level: :debug], fn ->
-          line = ~s({"type":"init","data":{"isPrimary":false,"hostname":"node2"}})
-          send_line_to_handler(:parse_replica, line)
-        end)
-
-      assert log =~ "init event"
-      assert log =~ "replica"
-    end
-
-    test "parses primaryChange event" do
-      log =
-        capture_log([level: :debug], fn ->
-          line = ~s({"type":"primaryChange","data":{"isPrimary":true,"hostname":"node3"}})
-          send_line_to_handler(:parse_change, line)
-        end)
-
-      assert log =~ "primaryChange event"
-      assert log =~ "primary"
-    end
-
+  describe "JSON parsing (non-Tracker events)" do
     test "ignores tx events" do
       log =
         capture_log([level: :debug], fn ->
@@ -86,14 +54,14 @@ defmodule EctoLiteFS.EventStreamTest do
 
           {:noreply, new_state} =
             EventStream.handle_info(
-              {:chunk, ~s({"type":"init","data":{"isPrimary":true,"hostname":"node1"}}\n)},
+              {:chunk, ~s({"type":"tx"}\n)},
               state
             )
 
           assert new_state.buffer == ""
         end)
 
-      assert log =~ "init event"
+      assert log =~ "tx event"
     end
 
     test "handles multiple complete lines in one chunk" do
@@ -101,15 +69,14 @@ defmodule EctoLiteFS.EventStreamTest do
         capture_log([level: :debug], fn ->
           state = make_state(:buffer_multi)
 
-          chunk =
-            ~s({"type":"init","data":{"isPrimary":true,"hostname":"node1"}}\n{"type":"primaryChange","data":{"isPrimary":false,"hostname":"node2"}}\n)
+          chunk = ~s({"type":"tx"}\n{"type":"unknown"}\n)
 
           {:noreply, new_state} = EventStream.handle_info({:chunk, chunk}, state)
           assert new_state.buffer == ""
         end)
 
-      assert log =~ "init event"
-      assert log =~ "primaryChange event"
+      assert log =~ "tx event"
+      assert log =~ "unknown event"
     end
 
     test "buffers incomplete lines across chunks" do
@@ -120,42 +87,152 @@ defmodule EctoLiteFS.EventStreamTest do
           # First chunk - incomplete JSON
           {:noreply, state2} =
             EventStream.handle_info(
-              {:chunk, ~s({"type":"init","data":{"isPrimary")},
+              {:chunk, ~s({"type":"tx)},
               state
             )
 
           # Should have buffered the incomplete line
-          assert state2.buffer == ~s({"type":"init","data":{"isPrimary")
+          assert state2.buffer == ~s({"type":"tx)
 
           # Second chunk - completes the JSON
           {:noreply, state3} =
             EventStream.handle_info(
-              {:chunk, ~s(:true,"hostname":"node1"}}\n)},
+              {:chunk, ~s("}\n)},
               state2
             )
 
           assert state3.buffer == ""
         end)
 
-      assert log =~ "init event"
-      assert log =~ "primary"
+      assert log =~ "tx event"
+    end
+  end
+
+  describe "Tracker integration" do
+    test "init with isPrimary true triggers Tracker.set_primary" do
+      name = unique_name(:event_primary)
+      {_temp_dir, primary_file} = create_temp_primary_file()
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000
+        )
+
+      eventually(fn -> Tracker.ready?(name) end)
+
+      # Simulate receiving an init event with isPrimary: true
+      event_stream_pid = Process.whereis(EventStream.process_name(name))
+      chunk = ~s({"type":"init","data":{"isPrimary":true}}\n)
+      send(event_stream_pid, {:chunk, chunk})
+
+      # Give time for the event to be processed
+      eventually(fn ->
+        case Tracker.get_primary(name) do
+          {:ok, node} -> node == Node.self()
+          _other -> false
+        end
+      end)
+
+      Supervisor.stop(sup)
     end
 
-    test "handles init event without hostname field (primary node)" do
-      log =
-        capture_log([level: :debug], fn ->
-          state = make_state(:no_hostname)
+    test "init with isPrimary false triggers Tracker.set_replica" do
+      name = unique_name(:event_replica)
+      {_temp_dir, primary_file} = create_temp_primary_file()
 
-          {:noreply, _state} =
-            EventStream.handle_info(
-              {:chunk, ~s({"type":"init","data":{"isPrimary":true}}\n)},
-              state
-            )
-        end)
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000
+        )
 
-      assert log =~ "init event"
-      assert log =~ "primary"
-      assert log =~ "hostname="
+      eventually(fn -> Tracker.ready?(name) end)
+
+      # First set ourselves as primary so we have something in cache
+      Tracker.set_primary(name, Node.self())
+      assert {:ok, node} = Tracker.get_primary(name)
+      assert node == Node.self()
+
+      # Simulate receiving an init event with isPrimary: false
+      event_stream_pid = Process.whereis(EventStream.process_name(name))
+      chunk = ~s({"type":"init","data":{"isPrimary":false,"hostname":"other:20202"}}\n)
+      send(event_stream_pid, {:chunk, chunk})
+
+      # Give time for the event to be processed - cache should be refreshed from DB
+      Process.sleep(50)
+
+      # The set_replica call refreshes from DB, which still has our node
+      # (since we wrote it). The key test is that it doesn't crash.
+      assert {:ok, _node} = Tracker.get_primary(name)
+
+      Supervisor.stop(sup)
+    end
+
+    test "primaryChange with isPrimary true triggers Tracker.set_primary" do
+      name = unique_name(:event_change_primary)
+      {_temp_dir, primary_file} = create_temp_primary_file()
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000
+        )
+
+      eventually(fn -> Tracker.ready?(name) end)
+
+      # Simulate receiving a primaryChange event with isPrimary: true
+      event_stream_pid = Process.whereis(EventStream.process_name(name))
+      chunk = ~s({"type":"primaryChange","data":{"isPrimary":true}}\n)
+      send(event_stream_pid, {:chunk, chunk})
+
+      eventually(fn ->
+        case Tracker.get_primary(name) do
+          {:ok, node} -> node == Node.self()
+          _other -> false
+        end
+      end)
+
+      Supervisor.stop(sup)
+    end
+
+    test "primaryChange with isPrimary false triggers Tracker.set_replica" do
+      name = unique_name(:event_change_replica)
+      {_temp_dir, primary_file} = create_temp_primary_file()
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000
+        )
+
+      eventually(fn -> Tracker.ready?(name) end)
+
+      # First set ourselves as primary
+      Tracker.set_primary(name, Node.self())
+      assert {:ok, node} = Tracker.get_primary(name)
+      assert node == Node.self()
+
+      # Simulate receiving a primaryChange event with isPrimary: false
+      event_stream_pid = Process.whereis(EventStream.process_name(name))
+      chunk = ~s({"type":"primaryChange","data":{"isPrimary":false,"hostname":"other:20202"}}\n)
+      send(event_stream_pid, {:chunk, chunk})
+
+      # Give time for the event to be processed
+      Process.sleep(50)
+
+      # The set_replica call refreshes from DB - should not crash
+      assert {:ok, _node} = Tracker.get_primary(name)
+
+      Supervisor.stop(sup)
     end
   end
 

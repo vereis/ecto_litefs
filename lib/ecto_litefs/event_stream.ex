@@ -14,6 +14,7 @@ defmodule EctoLiteFS.EventStream do
   use GenServer
 
   alias EctoLiteFS.Config
+  alias EctoLiteFS.Tracker
 
   require Logger
 
@@ -115,15 +116,13 @@ defmodule EctoLiteFS.EventStream do
   end
 
   defp handle_event(name, %{"type" => "init", "data" => %{"isPrimary" => is_primary} = data}) do
-    status = if is_primary, do: "primary", else: "replica"
     hostname = Map.get(data, "hostname", "")
-    Logger.debug("EctoLiteFS.EventStream[#{name}]: init event - #{status}, hostname=#{hostname}")
+    handle_primary_status_change(name, is_primary, "init", hostname)
   end
 
   defp handle_event(name, %{"type" => "primaryChange", "data" => %{"isPrimary" => is_primary} = data}) do
-    status = if is_primary, do: "primary", else: "replica"
     hostname = Map.get(data, "hostname", "")
-    Logger.debug("EctoLiteFS.EventStream[#{name}]: primaryChange event - #{status}, hostname=#{hostname}")
+    handle_primary_status_change(name, is_primary, "primaryChange", hostname)
   end
 
   defp handle_event(name, %{"type" => "tx"}) do
@@ -132,5 +131,55 @@ defmodule EctoLiteFS.EventStream do
 
   defp handle_event(name, event) do
     Logger.debug("EctoLiteFS.EventStream[#{name}]: unknown event type: #{inspect(event)}")
+  end
+
+  defp handle_primary_status_change(name, true = _is_primary, event_type, hostname) do
+    Logger.debug("EctoLiteFS.EventStream[#{name}]: #{event_type} event - primary, hostname=#{hostname}")
+    notify_tracker(name, {:set_primary, Node.self()})
+  end
+
+  defp handle_primary_status_change(name, false = _is_primary, event_type, hostname) do
+    Logger.debug("EctoLiteFS.EventStream[#{name}]: #{event_type} event - replica, hostname=#{hostname}")
+    notify_tracker(name, :set_replica)
+  end
+
+  defp notify_tracker(name, {:set_primary, node}) do
+    if Tracker.ready?(name) do
+      case Tracker.set_primary(name, node) do
+        :ok ->
+          true
+
+        {:error, reason} ->
+          Logger.debug("EctoLiteFS.EventStream[#{name}]: set_primary failed: #{inspect(reason)}")
+          false
+      end
+    else
+      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker not ready, skipping set_primary")
+      false
+    end
+  catch
+    :exit, reason ->
+      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker unavailable: #{inspect(reason)}")
+      false
+  end
+
+  defp notify_tracker(name, :set_replica) do
+    if Tracker.ready?(name) do
+      case Tracker.set_replica(name) do
+        :ok ->
+          true
+
+        {:error, reason} ->
+          Logger.debug("EctoLiteFS.EventStream[#{name}]: set_replica failed: #{inspect(reason)}")
+          false
+      end
+    else
+      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker not ready, skipping set_replica")
+      false
+    end
+  catch
+    :exit, reason ->
+      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker unavailable: #{inspect(reason)}")
+      false
   end
 end

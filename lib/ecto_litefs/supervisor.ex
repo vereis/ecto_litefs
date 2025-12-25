@@ -20,6 +20,7 @@ defmodule EctoLiteFS.Supervisor do
   use Supervisor
 
   alias EctoLiteFS.Config
+  alias EctoLiteFS.EventStream
   alias EctoLiteFS.Poller
   alias EctoLiteFS.Tracker
 
@@ -45,7 +46,8 @@ defmodule EctoLiteFS.Supervisor do
     children = [
       {Registry, keys: :unique, name: EctoLiteFS.registry_name(config.name)},
       {Tracker, config},
-      {Poller, config}
+      {Poller, config},
+      {EventStream, config}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)
