@@ -62,6 +62,7 @@ defmodule EctoLiteFS.Config do
     |> validate_atom!(:name)
     |> validate_positive_integer!(:poll_interval)
     |> validate_positive_integer!(:cache_ttl)
+    |> validate_table_name!()
     |> build_struct()
   end
 
@@ -90,6 +91,24 @@ defmodule EctoLiteFS.Config do
               "EctoLiteFS.Config :#{key} must be a positive integer, got: #{inspect(value)}"
 
       :error ->
+        opts
+    end
+  end
+
+  defp validate_table_name!(opts) do
+    cond do
+      not Keyword.has_key?(opts, :table_name) ->
+        opts
+
+      not is_binary(opts[:table_name]) ->
+        raise ArgumentError,
+              "EctoLiteFS.Config :table_name must be a string, got: #{inspect(opts[:table_name])}"
+
+      not Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_]*$/, opts[:table_name]) ->
+        raise ArgumentError,
+              "EctoLiteFS.Config :table_name must be a valid SQL identifier (alphanumeric and underscores, starting with letter or underscore), got: #{inspect(opts[:table_name])}"
+
+      true ->
         opts
     end
   end

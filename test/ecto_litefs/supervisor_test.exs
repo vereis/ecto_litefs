@@ -1,44 +1,65 @@
 defmodule EctoLiteFS.SupervisorTest do
-  use ExUnit.Case, async: true
-
-  alias EctoLiteFS.Poller
-  alias EctoLiteFS.Supervisor, as: LiteFSSupervisor
+  use EctoLiteFS.Case, async: false
 
   describe "start_link/1" do
-    test "starts supervisor with poller" do
-      {:ok, temp_dir} = Briefly.create(type: :directory)
-      primary_file = Path.join(temp_dir, ".primary")
+    test "starts supervisor with poller and tracker" do
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:sup)
 
       {:ok, sup_pid} =
         LiteFSSupervisor.start_link(
-          repo: TestRepo,
-          name: :sup_test_1,
+          repo: Repo,
+          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
       assert Process.alive?(sup_pid)
 
-      poller_pid = Process.whereis(Poller.process_name(:sup_test_1))
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+
+      poller_pid = Process.whereis(Poller.process_name(name))
       assert poller_pid
       assert Process.alive?(poller_pid)
+
+      tracker_pid = Process.whereis(Tracker.process_name(name))
+      assert tracker_pid
+      assert Process.alive?(tracker_pid)
 
       Supervisor.stop(sup_pid)
     end
 
     test "registers supervisor with correct name" do
-      {:ok, temp_dir} = Briefly.create(type: :directory)
-      primary_file = Path.join(temp_dir, ".primary")
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:sup_name)
 
       {:ok, sup_pid} =
         LiteFSSupervisor.start_link(
-          repo: TestRepo,
-          name: :sup_test_2,
+          repo: Repo,
+          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      assert Process.whereis(LiteFSSupervisor.supervisor_name(:sup_test_2)) == sup_pid
+      assert Process.whereis(LiteFSSupervisor.supervisor_name(name)) == sup_pid
+
+      Supervisor.stop(sup_pid)
+    end
+
+    test "starts registry as child" do
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:sup_registry)
+
+      {:ok, sup_pid} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000
+        )
+
+      registry_name = EctoLiteFS.registry_name(name)
+      assert Process.whereis(registry_name)
 
       Supervisor.stop(sup_pid)
     end
@@ -52,37 +73,49 @@ defmodule EctoLiteFS.SupervisorTest do
 
   describe "multiple instances" do
     test "can start multiple supervisors with different names" do
-      {:ok, temp_dir1} = Briefly.create(type: :directory)
-      {:ok, temp_dir2} = Briefly.create(type: :directory)
-      primary_file1 = Path.join(temp_dir1, ".primary")
-      primary_file2 = Path.join(temp_dir2, ".primary")
+      {_temp_dir1, primary_file1} = create_temp_primary_file()
+      {_temp_dir2, primary_file2} = create_temp_primary_file()
+      name1 = unique_name(:multi_1)
+      name2 = unique_name(:multi_2)
 
       {:ok, sup1} =
         LiteFSSupervisor.start_link(
-          repo: TestRepo1,
-          name: :multi_test_1,
+          repo: Repo,
+          name: name1,
           primary_file: primary_file1,
-          poll_interval: 60_000
+          poll_interval: 60_000,
+          table_name: unique_table_name("_sup_multi_1")
         )
 
       {:ok, sup2} =
         LiteFSSupervisor.start_link(
-          repo: TestRepo2,
-          name: :multi_test_2,
+          repo: Repo,
+          name: name2,
           primary_file: primary_file2,
-          poll_interval: 60_000
+          poll_interval: 60_000,
+          table_name: unique_table_name("_sup_multi_2")
         )
 
       assert Process.alive?(sup1)
       assert Process.alive?(sup2)
       assert sup1 != sup2
 
-      poller1 = Process.whereis(Poller.process_name(:multi_test_1))
-      poller2 = Process.whereis(Poller.process_name(:multi_test_2))
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name1) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name2) end)
+
+      poller1 = Process.whereis(Poller.process_name(name1))
+      poller2 = Process.whereis(Poller.process_name(name2))
 
       assert poller1
       assert poller2
       assert poller1 != poller2
+
+      tracker1 = Process.whereis(Tracker.process_name(name1))
+      tracker2 = Process.whereis(Tracker.process_name(name2))
+
+      assert tracker1
+      assert tracker2
+      assert tracker1 != tracker2
 
       Supervisor.stop(sup1)
       Supervisor.stop(sup2)

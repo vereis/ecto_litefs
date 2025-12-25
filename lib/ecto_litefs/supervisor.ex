@@ -21,6 +21,7 @@ defmodule EctoLiteFS.Supervisor do
 
   alias EctoLiteFS.Config
   alias EctoLiteFS.Poller
+  alias EctoLiteFS.Tracker
 
   @doc """
   Starts the EctoLiteFS supervisor.
@@ -42,9 +43,11 @@ defmodule EctoLiteFS.Supervisor do
   @impl Supervisor
   def init(%Config{} = config) do
     children = [
+      {Registry, keys: :unique, name: EctoLiteFS.registry_name(config.name)},
+      {Tracker, config},
       {Poller, config}
     ]
 
-    Supervisor.init(children, strategy: :one_for_one)
+    Supervisor.init(children, strategy: :rest_for_one)
   end
 end

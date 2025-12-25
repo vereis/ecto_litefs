@@ -31,4 +31,60 @@ defmodule EctoLiteFS do
   * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
   * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
   """
+
+  alias EctoLiteFS.Tracker
+
+  @doc """
+  Returns the registry name for a given instance name.
+  """
+  @spec registry_name(atom()) :: atom()
+  def registry_name(name) when is_atom(name) do
+    Module.concat([__MODULE__, name, Registry])
+  end
+
+  @doc """
+  Returns the Tracker pid for the given instance name and repo module.
+
+  Raises `ArgumentError` if no Tracker is registered for the given Repo.
+
+  ## Examples
+
+      iex> EctoLiteFS.get_tracker!(:my_litefs, MyApp.Repo)
+      #PID<0.123.0>
+
+      iex> EctoLiteFS.get_tracker!(:unknown, MyApp.Repo)
+      ** (ArgumentError) EctoLiteFS instance :unknown is not running
+
+  """
+  @spec get_tracker!(atom(), module()) :: pid()
+  def get_tracker!(instance_name, repo) when is_atom(instance_name) and is_atom(repo) do
+    registry = registry_name(instance_name)
+
+    case Process.whereis(registry) do
+      nil ->
+        raise ArgumentError,
+              "EctoLiteFS instance #{inspect(instance_name)} is not running. " <>
+                "Ensure EctoLiteFS.Supervisor is started with name: #{inspect(instance_name)}"
+
+      _pid ->
+        case Registry.lookup(registry, repo) do
+          [{pid, _value}] ->
+            pid
+
+          [] ->
+            raise ArgumentError,
+                  "no EctoLiteFS tracker registered for #{inspect(repo)} in instance #{inspect(instance_name)}"
+        end
+    end
+  end
+
+  @doc """
+  Checks if the Tracker for the given instance has completed initialization.
+
+  Returns `true` if the tracker is ready, `false` otherwise.
+  """
+  @spec tracker_ready?(atom()) :: boolean()
+  def tracker_ready?(instance_name) when is_atom(instance_name) do
+    Tracker.ready?(instance_name)
+  end
 end
