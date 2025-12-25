@@ -536,7 +536,7 @@ defmodule EctoLiteFS.TrackerTest do
 
   describe "Poller integration" do
     test "Poller detection triggers Tracker update" do
-      {temp_dir, primary_file} = create_temp_primary_file()
+      {_temp_dir, primary_file} = create_temp_primary_file()
       name = unique_name(:poller_integration)
 
       File.rm(primary_file)
