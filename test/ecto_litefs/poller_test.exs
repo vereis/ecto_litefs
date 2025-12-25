@@ -96,14 +96,18 @@ defmodule EctoLiteFS.PollerTest do
       log =
         capture_log([level: :debug], fn ->
           {:ok, pid} = Poller.start_link(config)
-          Process.sleep(350)
+          # Toggle status to trigger multiple log messages
+          Process.sleep(150)
+          File.write!(primary_file, "other-node")
+          Process.sleep(150)
+          File.rm!(primary_file)
+          Process.sleep(150)
           GenServer.stop(pid)
         end)
 
-      # Should see multiple polls with 100ms interval over 350ms
-      # Initial poll at ~100ms, then at ~200ms, ~300ms
-      matches = Regex.scan(~r/primary/, log)
-      assert length(matches) >= 3
+      # Should see status changes: primary -> replica -> primary
+      assert log =~ "primary"
+      assert log =~ "replica"
     end
 
     test "treats nonexistent paths as primary (file absent)" do
