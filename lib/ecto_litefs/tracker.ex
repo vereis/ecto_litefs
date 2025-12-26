@@ -126,25 +126,34 @@ defmodule EctoLiteFS.Tracker do
   """
   @spec get_primary(atom(), keyword()) :: {:ok, node() | nil} | {:error, term()}
   def get_primary(name, opts \\ []) when is_atom(name) do
-    if Keyword.get(opts, :force, false) do
+    force? = Keyword.get(opts, :force, false)
+
+    if force? do
       GenServer.call(process_name(name), :force_refresh_cache)
     else
-      case :ets.lookup(ets_table_name(name), @ets_key) do
-        [{@ets_key, node, cached_at, ttl}] ->
-          if System.monotonic_time(:millisecond) - cached_at < ttl do
-            {:ok, node}
-          else
-            GenServer.call(process_name(name), :refresh_cache)
-          end
-
-        [] ->
-          GenServer.call(process_name(name), :refresh_cache)
-      end
+      get_primary_from_cache(name)
     end
   rescue
     ArgumentError -> {:error, :not_ready}
   catch
     :exit, _reason -> {:error, :not_ready}
+  end
+
+  defp get_primary_from_cache(name) do
+    case :ets.lookup(ets_table_name(name), @ets_key) do
+      [{@ets_key, node, cached_at, ttl}] ->
+        now = System.monotonic_time(:millisecond)
+        cache_fresh? = now - cached_at < ttl
+
+        if cache_fresh? do
+          {:ok, node}
+        else
+          GenServer.call(process_name(name), :refresh_cache)
+        end
+
+      [] ->
+        GenServer.call(process_name(name), :refresh_cache)
+    end
   end
 
   @doc """
