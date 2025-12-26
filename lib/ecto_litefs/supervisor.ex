@@ -50,6 +50,6 @@ defmodule EctoLiteFS.Supervisor do
       {EventStream, config}
     ]
 
-    Supervisor.init(children, strategy: :rest_for_one)
+    Supervisor.init(children, strategy: :one_for_one)
   end
 end
