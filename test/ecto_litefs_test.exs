@@ -39,8 +39,8 @@ defmodule EctoLiteFSTest do
       Supervisor.stop(sup)
     end
 
-    test "raises with helpful message when instance not running" do
-      assert_raise ArgumentError, ~r/EctoLiteFS instance :unknown_instance is not running/, fn ->
+    test "raises when instance not running" do
+      assert_raise ArgumentError, ~r/unknown registry/, fn ->
         EctoLiteFS.get_tracker!(:unknown_instance, SomeRepo)
       end
     end

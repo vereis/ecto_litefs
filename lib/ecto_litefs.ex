@@ -45,7 +45,9 @@ defmodule EctoLiteFS do
   @doc """
   Returns the Tracker pid for the given instance name and repo module.
 
-  Raises `ArgumentError` if no Tracker is registered for the given Repo.
+  Raises `ArgumentError` if:
+  - The EctoLiteFS instance is not running (supervisor not started)
+  - No Tracker is registered for the given Repo in that instance
 
   ## Examples
 
@@ -53,28 +55,23 @@ defmodule EctoLiteFS do
       #PID<0.123.0>
 
       iex> EctoLiteFS.get_tracker!(:unknown, MyApp.Repo)
-      ** (ArgumentError) EctoLiteFS instance :unknown is not running
+      ** (ArgumentError) unknown registry: Elixir.EctoLiteFS.unknown.Registry
+
+      iex> EctoLiteFS.get_tracker!(:my_litefs, UnregisteredRepo)
+      ** (ArgumentError) no EctoLiteFS tracker registered for UnregisteredRepo in instance :my_litefs
 
   """
   @spec get_tracker!(atom(), module()) :: pid()
   def get_tracker!(instance_name, repo) when is_atom(instance_name) and is_atom(repo) do
     registry = registry_name(instance_name)
 
-    case Process.whereis(registry) do
-      nil ->
+    case Registry.lookup(registry, repo) do
+      [{pid, _value}] ->
+        pid
+
+      [] ->
         raise ArgumentError,
-              "EctoLiteFS instance #{inspect(instance_name)} is not running. " <>
-                "Ensure EctoLiteFS.Supervisor is started with name: #{inspect(instance_name)}"
-
-      _pid ->
-        case Registry.lookup(registry, repo) do
-          [{pid, _value}] ->
-            pid
-
-          [] ->
-            raise ArgumentError,
-                  "no EctoLiteFS tracker registered for #{inspect(repo)} in instance #{inspect(instance_name)}"
-        end
+              "no EctoLiteFS tracker registered for #{inspect(repo)} in instance #{inspect(instance_name)}"
     end
   end
 
