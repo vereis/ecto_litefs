@@ -88,6 +88,7 @@ jobs:
         run: nix develop --command mix test
 
       - name: Generate coverage report
+        continue-on-error: true
         run: nix develop --command mix coveralls.github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
