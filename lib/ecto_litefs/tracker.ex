@@ -7,6 +7,29 @@ defmodule EctoLiteFS.Tracker do
   - Ensuring the database table exists via `CREATE TABLE IF NOT EXISTS`
   - Registering itself in the instance's Registry for lookup by repo module
   - Providing public API for reading/writing primary status
+
+  ## Initialization
+
+  The Tracker uses non-blocking initialization with automatic retries. If the
+  database is not immediately available, it will retry with exponential backoff
+  instead of blocking the GenServer process with `Process.sleep/1`.
+
+  During initialization, all GenServer calls (except `:ready?`) will return
+  `{:error, :not_ready}` to prevent crashes or timeouts.
+
+  ## Atom Safety
+
+  To prevent atom table exhaustion attacks, the Tracker only accepts node names
+  that are present in the connected cluster (`[Node.self() | Node.list()]`).
+  Node names from the database are cross-referenced against this list, and
+  disconnected nodes are rejected with an error log.
+
+  ## Cache Refresh
+
+  The Tracker implements single-flight cache refresh with a configurable grace
+  period (`:refresh_grace_period`). If multiple processes request a refresh
+  within the grace period, the first refresh wins and subsequent requests
+  return the cached value without hitting the database.
   """
 
   use GenServer
@@ -17,7 +40,6 @@ defmodule EctoLiteFS.Tracker do
   require Logger
 
   @default_max_retries 5
-  @default_base_retry_delay_ms 100
 
   @ets_key :primary_info
 
@@ -86,21 +108,38 @@ defmodule EctoLiteFS.Tracker do
 
   Returns `{:ok, node}` if a primary is known, `{:ok, nil}` if no primary
   has been recorded, or `{:error, :not_ready}` if tracker isn't initialized.
+
   Reads directly from ETS when cache is fresh, falling back to GenServer
   call to refresh from DB when stale or empty.
-  """
-  @spec get_primary(atom()) :: {:ok, node() | nil} | {:error, term()}
-  def get_primary(name) when is_atom(name) do
-    case :ets.lookup(ets_table_name(name), @ets_key) do
-      [{@ets_key, node, cached_at, ttl}] ->
-        if System.monotonic_time(:millisecond) - cached_at < ttl do
-          {:ok, node}
-        else
-          GenServer.call(process_name(name), :refresh_cache)
-        end
 
-      [] ->
-        GenServer.call(process_name(name), :refresh_cache)
+  ## Options
+
+  * `:force` - When `true`, bypasses cache and forces a DB refresh. Default: `false`
+
+  ## Examples
+
+      iex> EctoLiteFS.Tracker.get_primary(:my_instance)
+      {:ok, :node1@host}
+
+      iex> EctoLiteFS.Tracker.get_primary(:my_instance, force: true)
+      {:ok, :node1@host}
+  """
+  @spec get_primary(atom(), keyword()) :: {:ok, node() | nil} | {:error, term()}
+  def get_primary(name, opts \\ []) when is_atom(name) do
+    if Keyword.get(opts, :force, false) do
+      GenServer.call(process_name(name), :force_refresh_cache)
+    else
+      case :ets.lookup(ets_table_name(name), @ets_key) do
+        [{@ets_key, node, cached_at, ttl}] ->
+          if System.monotonic_time(:millisecond) - cached_at < ttl do
+            {:ok, node}
+          else
+            GenServer.call(process_name(name), :refresh_cache)
+          end
+
+        [] ->
+          GenServer.call(process_name(name), :refresh_cache)
+      end
     end
   rescue
     ArgumentError -> {:error, :not_ready}
@@ -131,25 +170,48 @@ defmodule EctoLiteFS.Tracker do
 
   @impl GenServer
   def init(%Config{} = config) do
-    {:ok, %{config: config, ets_table: nil, db_ready: false}, {:continue, :init_db}}
+    {:ok,
+     %{
+       config: config,
+       ets_table: nil,
+       db_ready: false,
+       retry_count: 0,
+       last_refresh_at: nil
+     }, {:continue, :init_db}}
   end
 
   @impl GenServer
   def handle_continue(:init_db, state) do
-    case ensure_db_table(state.config, 0) do
+    case try_init_db(state.config) do
       :ok ->
         register_for_repo!(state.config.name, state.config.repo)
         ets_table = :ets.new(ets_table_name(state.config.name), [:named_table, :public, :set, read_concurrency: true])
         {:noreply, %{state | ets_table: ets_table, db_ready: true}}
 
       {:error, reason} ->
-        {:stop, {:db_init_failed, reason}, state}
+        if state.retry_count < @default_max_retries do
+          delay = EctoLiteFS.Utils.backoff_delay(state.retry_count)
+
+          Logger.warning(
+            "EctoLiteFS.Tracker[#{state.config.name}]: DB init failed, retrying in #{delay}ms: #{inspect(reason)}"
+          )
+
+          Process.send_after(self(), :retry_init_db, delay)
+          {:noreply, %{state | retry_count: state.retry_count + 1}}
+        else
+          Logger.error("EctoLiteFS.Tracker[#{state.config.name}]: DB init failed after #{@default_max_retries} retries")
+          {:stop, {:db_init_failed, reason}, state}
+        end
     end
   end
 
   @impl GenServer
   def handle_call(:ready?, _from, state) do
     {:reply, state.db_ready, state}
+  end
+
+  def handle_call(_request, _from, %{db_ready: false} = state) do
+    {:reply, {:error, :not_ready}, state}
   end
 
   def handle_call({:set_primary, node}, _from, state) do
@@ -177,16 +239,22 @@ defmodule EctoLiteFS.Tracker do
   end
 
   def handle_call(:refresh_cache, _from, state) do
-    case refresh_cache_from_db(state) do
-      :ok ->
-        case :ets.lookup(state.ets_table, @ets_key) do
-          [{@ets_key, node, _cached_at, _ttl}] -> {:reply, {:ok, node}, state}
-          [] -> {:reply, {:ok, nil}, state}
-        end
+    now = System.monotonic_time(:millisecond)
+    grace_period = state.config.refresh_grace_period
 
-      {:error, _} = error ->
-        {:reply, error, state}
+    within_grace_period? = state.last_refresh_at && now - state.last_refresh_at < grace_period
+
+    if within_grace_period? do
+      result = get_cached_primary(state)
+      {:reply, result, state}
+    else
+      do_refresh_cache(state, now)
     end
+  end
+
+  def handle_call(:force_refresh_cache, _from, state) do
+    now = System.monotonic_time(:millisecond)
+    do_refresh_cache(state, now)
   end
 
   def handle_call(:invalidate_cache, _from, state) do
@@ -194,7 +262,12 @@ defmodule EctoLiteFS.Tracker do
     {:reply, :ok, state}
   end
 
-  defp ensure_db_table(%Config{} = config, retry_count) when retry_count < @default_max_retries do
+  @impl GenServer
+  def handle_info(:retry_init_db, state) do
+    {:noreply, state, {:continue, :init_db}}
+  end
+
+  defp try_init_db(config) do
     sql = """
     CREATE TABLE IF NOT EXISTS #{config.table_name} (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -204,30 +277,11 @@ defmodule EctoLiteFS.Tracker do
     """
 
     case SQL.query(config.repo, sql, []) do
-      {:ok, _result} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "EctoLiteFS.Tracker[#{config.name}]: DB init failed (attempt #{retry_count + 1}/#{@default_max_retries}), retrying: #{inspect(reason)}"
-        )
-
-        Process.sleep(trunc(@default_base_retry_delay_ms * :math.pow(2, retry_count)))
-        ensure_db_table(config, retry_count + 1)
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   rescue
-    e in [DBConnection.ConnectionError, Ecto.QueryError] ->
-      Logger.warning(
-        "EctoLiteFS.Tracker[#{config.name}]: DB init failed (attempt #{retry_count + 1}/#{@default_max_retries}), retrying: #{inspect(e)}"
-      )
-
-      Process.sleep(trunc(@default_base_retry_delay_ms * :math.pow(2, retry_count)))
-      ensure_db_table(config, retry_count + 1)
-  end
-
-  defp ensure_db_table(%Config{} = config, _retry_count) do
-    Logger.error("EctoLiteFS.Tracker[#{config.name}]: DB init failed after #{@default_max_retries} retries")
-    {:error, :max_retries_exceeded}
+    e in [DBConnection.ConnectionError, Ecto.QueryError] -> {:error, e}
   end
 
   defp register_for_repo!(instance_name, repo) do
@@ -240,22 +294,48 @@ defmodule EctoLiteFS.Tracker do
     end
   end
 
+  defp get_cached_primary(state) do
+    case :ets.lookup(state.ets_table, @ets_key) do
+      [{@ets_key, node, _cached_at, _ttl}] -> {:ok, node}
+      [] -> {:ok, nil}
+    end
+  end
+
+  defp do_refresh_cache(state, now) do
+    case refresh_cache_from_db(state) do
+      :ok ->
+        result = get_cached_primary(state)
+        {:reply, result, %{state | last_refresh_at: now}}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   defp refresh_cache_from_db(state) do
     sql = "SELECT node_name FROM #{state.config.table_name} WHERE id = 1"
 
     case SQL.query(state.config.repo, sql, []) do
       {:ok, %{rows: [[node_name]]}} ->
-        node =
-          try do
-            String.to_existing_atom(node_name)
-          rescue
-            ArgumentError ->
-              Logger.warning("EctoLiteFS.Tracker: unknown node #{inspect(node_name)}, creating atom")
-              String.to_atom(node_name)
-          end
+        connected_nodes = Map.new([Node.self() | Node.list()], &{Atom.to_string(&1), &1})
 
-        :ets.insert(state.ets_table, {@ets_key, node, System.monotonic_time(:millisecond), state.config.cache_ttl})
-        :ok
+        case Map.get(connected_nodes, node_name) do
+          nil ->
+            Logger.error(
+              "EctoLiteFS.Tracker[#{state.config.name}]: primary node #{inspect(node_name)} is not connected to cluster"
+            )
+
+            :ets.delete(state.ets_table, @ets_key)
+            :ok
+
+          node ->
+            :ets.insert(
+              state.ets_table,
+              {@ets_key, node, System.monotonic_time(:millisecond), state.config.cache_ttl}
+            )
+
+            :ok
+        end
 
       {:ok, %{rows: []}} ->
         :ets.delete(state.ets_table, @ets_key)
