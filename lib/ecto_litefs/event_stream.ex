@@ -8,7 +8,9 @@ defmodule EctoLiteFS.EventStream do
   - `primaryChange` - sent when primary status changes, same structure
   - `tx` - transaction events (ignored for now)
 
-  If the stream ends or errors, the GenServer stops and the supervisor restarts it.
+  The connection will timeout after 30 seconds if unable to reach the LiteFS
+  endpoint. If the stream ends or errors, the GenServer stops and the 
+  supervisor restarts it.
   """
 
   use GenServer
@@ -59,7 +61,13 @@ defmodule EctoLiteFS.EventStream do
         {:cont, acc}
       end
 
-      result = Req.get(url, into: into_fun, receive_timeout: :infinity)
+      result =
+        Req.get(url,
+          into: into_fun,
+          receive_timeout: :infinity,
+          connect_options: [timeout: 30_000]
+        )
+
       send(parent, {:stream_ended, result})
     end)
 
