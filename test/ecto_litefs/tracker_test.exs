@@ -345,13 +345,16 @@ defmodule EctoLiteFS.TrackerTest do
 
       eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
 
-      Tracker.set_primary(name, :old_node@host)
+      current_node = Node.self()
+      Tracker.set_primary(name, current_node)
+
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
+
+      Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
+
       Process.sleep(10)
 
-      Repo.query!("UPDATE #{table_name} SET node_name = 'new_node@host' WHERE id = 1")
-
-      # Cache is stale (TTL=1ms), so refreshes from DB
-      assert {:ok, :new_node@host} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(name)
 
       Supervisor.stop(sup)
     end
@@ -456,19 +459,17 @@ defmodule EctoLiteFS.TrackerTest do
 
       eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
 
-      Tracker.set_primary(name, :old_node@host)
-      assert {:ok, :old_node@host} = Tracker.get_primary(name)
+      current_node = Node.self()
+      Tracker.set_primary(name, current_node)
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
 
-      # Update DB directly
-      Repo.query!("UPDATE #{table_name} SET node_name = 'new_node@host' WHERE id = 1")
+      Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      # Cache still returns old value
-      assert {:ok, :old_node@host} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
 
-      # Invalidate forces next read to hit DB
       Tracker.invalidate_cache(name)
 
-      assert {:ok, :new_node@host} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(name)
 
       Supervisor.stop(sup)
     end
@@ -491,16 +492,17 @@ defmodule EctoLiteFS.TrackerTest do
 
       eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
 
-      Tracker.set_primary(name, :old_node@host)
-      assert {:ok, :old_node@host} = Tracker.get_primary(name)
+      current_node = Node.self()
+      Tracker.set_primary(name, current_node)
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
 
-      Repo.query!("UPDATE #{table_name} SET node_name = 'new_node@host' WHERE id = 1")
+      Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      assert {:ok, :old_node@host} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
 
       Tracker.set_replica(name)
 
-      assert {:ok, :new_node@host} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(name)
 
       Supervisor.stop(sup)
     end
@@ -589,6 +591,125 @@ defmodule EctoLiteFS.TrackerTest do
       eventually(fn ->
         assert Tracker.is_primary?(name) == false
       end)
+
+      Supervisor.stop(sup)
+    end
+  end
+
+  describe "atom safety in refresh_cache_from_db" do
+    test "rejects node names not in connected nodes" do
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:atom_safety)
+      table_name = unique_table_name("_atom_safety")
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000,
+          table_name: table_name
+        )
+
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+
+      Repo.query!("INSERT INTO #{table_name} (id, node_name, updated_at) VALUES (1, 'fake_node@invalid', 0)")
+
+      Tracker.invalidate_cache(name)
+      assert {:ok, nil} = Tracker.get_primary(name)
+
+      Supervisor.stop(sup)
+    end
+
+    test "accepts node names from connected nodes" do
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:atom_safety_ok)
+      table_name = unique_table_name("_atom_safety_ok")
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000,
+          table_name: table_name
+        )
+
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+
+      node_name = Atom.to_string(Node.self())
+      Repo.query!("INSERT INTO #{table_name} (id, node_name, updated_at) VALUES (1, ?, 0)", [node_name])
+
+      Tracker.invalidate_cache(name)
+      current_node = Node.self()
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
+
+      Supervisor.stop(sup)
+    end
+  end
+
+  describe "refresh grace period" do
+    test "normal refresh respects grace period but force refresh bypasses it" do
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:grace_period)
+      table_name = unique_table_name("_grace_period")
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000,
+          table_name: table_name,
+          refresh_grace_period: 500
+        )
+
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+
+      current_node = Node.self()
+      Tracker.set_primary(name, current_node)
+
+      Tracker.invalidate_cache(name)
+
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
+
+      Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
+
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
+
+      assert {:ok, nil} = Tracker.get_primary(name, force: true)
+
+      Supervisor.stop(sup)
+    end
+  end
+
+  describe "get_primary with force option" do
+    test "force: true bypasses cache" do
+      {_temp_dir, primary_file} = create_temp_primary_file()
+      name = unique_name(:force_refresh)
+      table_name = unique_table_name("_force_refresh")
+
+      {:ok, sup} =
+        LiteFSSupervisor.start_link(
+          repo: Repo,
+          name: name,
+          primary_file: primary_file,
+          poll_interval: 60_000,
+          table_name: table_name,
+          cache_ttl: 60_000
+        )
+
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+
+      current_node = Node.self()
+      Tracker.set_primary(name, current_node)
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
+
+      Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
+
+      assert {:ok, ^current_node} = Tracker.get_primary(name)
+
+      assert {:ok, nil} = Tracker.get_primary(name, force: true)
 
       Supervisor.stop(sup)
     end
