@@ -1,0 +1,22 @@
+# LiteFS configuration for primary node
+fuse:
+  dir: "/litefs"
+
+data:
+  dir: "/var/lib/litefs"
+
+http:
+  addr: ":20202"
+
+lease:
+  type: "consul"
+  advertise-url: "http://primary:20202"
+  candidate: true
+  consul:
+    url: "http://consul:8500"
+    key: "litefs/primary"
+    ttl: "10s"
+    lock-delay: "1s"
+
+exec:
+  - cmd: "/app/start.sh"
