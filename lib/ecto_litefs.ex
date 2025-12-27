@@ -6,9 +6,47 @@ defmodule EctoLiteFS do
   write operations to it, allowing replicas to handle reads locally while writes are
   transparently routed to the primary.
 
-  ## Usage
+  > **Built on EctoMiddleware:** EctoLiteFS is powered by [EctoMiddleware](https://hex.pm/packages/ecto_middleware),
+  > which is included as a dependency. Installing `ecto_litefs` gives you everything you need!
 
-  Add the supervisor to your application's supervision tree, after your Repo:
+  ## Quick Example
+
+      # 1. Add EctoLiteFS supervisor to your application
+      defmodule MyApp.Application do
+        def start(_type, _args) do
+          children = [
+            MyApp.Repo,
+            {EctoLiteFS.Supervisor, repo: MyApp.Repo}
+          ]
+
+          Supervisor.start_link(children, strategy: :one_for_one)
+        end
+      end
+
+      # 2. Add middleware to your Repo
+      defmodule MyApp.Repo do
+        use Ecto.Repo, otp_app: :my_app
+        use EctoMiddleware.Repo
+
+        @impl EctoMiddleware.Repo
+        def middleware(_action, _resource) do
+          [EctoLiteFS.Middleware]
+        end
+      end
+
+      # 3. Use your Repo normally - writes are automatically forwarded!
+      # On primary node:
+      MyApp.Repo.insert!(%User{name: "Alice"})  # Executes locally
+
+      # On replica node:
+      MyApp.Repo.insert!(%User{name: "Bob"})    # Forwarded to primary via :erpc
+      MyApp.Repo.all(User)                      # Reads locally from replica
+
+  ## Setup
+
+  ### 1. Add to Supervision Tree
+
+  Add `EctoLiteFS.Supervisor` to your application's supervision tree, **after** your Repo:
 
       children = [
         MyApp.Repo,
@@ -20,6 +58,22 @@ defmodule EctoLiteFS do
         }
       ]
 
+  ### 2. Add Middleware to Repo
+
+  EctoLiteFS uses [EctoMiddleware](https://hex.pm/packages/ecto_middleware) (included as a dependency):
+
+      defmodule MyApp.Repo do
+        use Ecto.Repo, otp_app: :my_app
+        use EctoMiddleware.Repo  # Comes with ecto_litefs!
+
+        @impl EctoMiddleware.Repo
+        def middleware(_action, _resource) do
+          [EctoLiteFS.Middleware]  # Add alongside other middleware if needed
+        end
+      end
+
+  That's it! Writes will automatically be forwarded to the primary node when running on a replica.
+
   ## Configuration Options
 
   * `:repo` - Required. The Ecto Repo module to track (also serves as the unique identifier).
@@ -29,6 +83,96 @@ defmodule EctoLiteFS do
   * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
   * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
   * `:erpc_timeout` - Timeout for `:erpc` calls when forwarding writes to primary. Default: `15_000`
+
+  ## How It Works
+
+  EctoLiteFS uses multiple detection methods to determine primary status:
+
+  1. **Filesystem polling** - Checks for the presence of LiteFS's `.primary` file
+  2. **Event streaming** - Subscribes to LiteFS's HTTP event stream for real-time updates
+  3. **Database tracking** - Stores primary node information in a replicated table
+
+  When a write operation is detected on a replica node, it's automatically forwarded
+  to the primary node via `:erpc.call/4`.
+
+  ### Primary Detection
+
+  The Tracker process maintains an ETS cache of the current primary node, refreshed from
+  the database when stale. This ensures low-latency reads while maintaining consistency.
+
+  ### Write Forwarding
+
+  The middleware intercepts write operations (insert, update, delete) and checks if the
+  current node is the primary. If not, it forwards the operation to the primary using
+  `:erpc.call/4` with a configurable timeout.
+
+  ## Development & Test Mode
+
+  When `EctoLiteFS.Supervisor` is not started (e.g., in dev/test), the middleware
+  automatically passes through to local execution. This means you can add the
+  middleware to your Repo and it will "just work" in all environments:
+
+  - **Production (with LiteFS):** Forwards writes to primary node
+  - **Development/Test (no LiteFS):** Executes writes locally
+
+  ## Telemetry Events
+
+  EctoLiteFS emits telemetry events for observability:
+
+  - `[:ecto_litefs, :forward, :start]` - Write forwarding initiated
+  - `[:ecto_litefs, :forward, :stop]` - Forwarding completed successfully
+  - `[:ecto_litefs, :forward, :exception]` - Forwarding failed
+
+  All events include metadata: `%{repo: repo, action: action, primary_node: node}`
+
+  ### Example: Monitoring Write Forwarding
+
+      :telemetry.attach(
+        "log-write-forwards",
+        [:ecto_litefs, :forward, :stop],
+        fn _event, %{duration: duration}, %{repo: repo, action: action}, _config ->
+          Logger.info("Forwarded \#{action} to primary in \#{duration}ns")
+        end,
+        nil
+      )
+
+  ## Error Handling
+
+  - `{:error, :primary_unavailable}` - No primary node is known (cluster may be initializing)
+  - `{:error, {:erpc, :timeout, node}}` - RPC call timed out
+  - `{:error, {:erpc, :noconnection, node}}` - Primary node is unreachable
+
+  > #### Timeout Warning {: .warning}
+  >
+  > A timeout error does **not** mean the write failed. The primary node may have
+  > completed the write before the timeout occurred. Design your application to
+  > handle this uncertainty (e.g., idempotent writes, conflict resolution).
+
+  ## Limitations
+
+  - **Transactions:** Write forwarding within `Repo.transaction/2` is not currently
+    supported. Transactions must execute entirely on the primary node.
+
+  ## Public API
+
+  While the middleware handles most operations automatically, you can also use the
+  public API for direct control:
+
+      # Check if current node is primary
+      EctoLiteFS.is_primary?(MyApp.Repo)
+      #=> true
+
+      # Get current primary node
+      EctoLiteFS.get_primary(MyApp.Repo)
+      #=> {:ok, :node1@host}
+
+      # Manually set primary (usually not needed)
+      EctoLiteFS.set_primary(MyApp.Repo, node())
+      #=> :ok
+
+      # Invalidate cache (force refresh from DB)
+      EctoLiteFS.invalidate_cache(MyApp.Repo)
+      #=> :ok
   """
 
   alias EctoLiteFS.Tracker
