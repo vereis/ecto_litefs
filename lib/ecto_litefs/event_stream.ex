@@ -25,15 +25,15 @@ defmodule EctoLiteFS.EventStream do
   """
   @spec start_link(Config.t()) :: GenServer.on_start()
   def start_link(%Config{} = config) do
-    GenServer.start_link(__MODULE__, config, name: process_name(config.name))
+    GenServer.start_link(__MODULE__, config, name: process_name(config.repo))
   end
 
   @doc """
-  Returns the process name for an EventStream with the given instance name.
+  Returns the process name for an EventStream with the given repo module.
   """
-  @spec process_name(atom()) :: atom()
-  def process_name(name) when is_atom(name) do
-    Module.concat(__MODULE__, name)
+  @spec process_name(module()) :: atom()
+  def process_name(repo) when is_atom(repo) do
+    Module.concat(__MODULE__, repo)
   end
 
   @impl GenServer
@@ -49,7 +49,7 @@ defmodule EctoLiteFS.EventStream do
   @impl GenServer
   def handle_continue(:connect, state) do
     url = state.config.event_stream_url
-    Logger.debug("EctoLiteFS.EventStream[#{state.config.name}]: connecting to #{url}")
+    Logger.debug("EctoLiteFS.EventStream[#{inspect(state.config.repo)}]: connecting to #{url}")
 
     parent = self()
 
@@ -81,7 +81,7 @@ defmodule EctoLiteFS.EventStream do
 
     Enum.each(lines, fn line ->
       if line != "" do
-        handle_line(state.config.name, line)
+        handle_line(state.config.repo, line)
       end
     end)
 
@@ -92,102 +92,102 @@ defmodule EctoLiteFS.EventStream do
   def handle_info({:stream_ended, result}, state) do
     case result do
       {:ok, %Req.Response{status: 200}} ->
-        Logger.debug("EctoLiteFS.EventStream[#{state.config.name}]: stream ended normally")
+        Logger.debug("EctoLiteFS.EventStream[#{inspect(state.config.repo)}]: stream ended normally")
         {:stop, :normal, state}
 
       {:ok, %Req.Response{status: status}} ->
-        Logger.warning("EctoLiteFS.EventStream[#{state.config.name}]: unexpected status #{status}")
+        Logger.warning("EctoLiteFS.EventStream[#{inspect(state.config.repo)}]: unexpected status #{status}")
         {:stop, {:error, {:unexpected_status, status}}, state}
 
       {:error, reason} ->
-        Logger.warning("EctoLiteFS.EventStream[#{state.config.name}]: connection failed: #{inspect(reason)}")
+        Logger.warning("EctoLiteFS.EventStream[#{inspect(state.config.repo)}]: connection failed: #{inspect(reason)}")
         {:stop, {:error, reason}, state}
     end
   end
 
   @impl GenServer
   def handle_info(msg, state) do
-    Logger.warning("EctoLiteFS.EventStream[#{state.config.name}]: unexpected message: #{inspect(msg)}")
+    Logger.warning("EctoLiteFS.EventStream[#{inspect(state.config.repo)}]: unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
 
-  defp handle_line(name, line) do
+  defp handle_line(repo, line) do
     case Jason.decode(line) do
       {:ok, event} ->
-        handle_event(name, event)
+        handle_event(repo, event)
 
       {:error, reason} ->
         Logger.warning(
-          "EctoLiteFS.EventStream[#{name}]: failed to parse JSON: #{inspect(reason)}, line: #{inspect(line)}"
+          "EctoLiteFS.EventStream[#{inspect(repo)}]: failed to parse JSON: #{inspect(reason)}, line: #{inspect(line)}"
         )
     end
   end
 
-  defp handle_event(name, %{"type" => "init", "data" => %{"isPrimary" => is_primary} = data}) do
+  defp handle_event(repo, %{"type" => "init", "data" => %{"isPrimary" => is_primary} = data}) do
     hostname = Map.get(data, "hostname", "")
-    handle_primary_status_change(name, is_primary, "init", hostname)
+    handle_primary_status_change(repo, is_primary, "init", hostname)
   end
 
-  defp handle_event(name, %{"type" => "primaryChange", "data" => %{"isPrimary" => is_primary} = data}) do
+  defp handle_event(repo, %{"type" => "primaryChange", "data" => %{"isPrimary" => is_primary} = data}) do
     hostname = Map.get(data, "hostname", "")
-    handle_primary_status_change(name, is_primary, "primaryChange", hostname)
+    handle_primary_status_change(repo, is_primary, "primaryChange", hostname)
   end
 
-  defp handle_event(name, %{"type" => "tx"}) do
-    Logger.debug("EctoLiteFS.EventStream[#{name}]: tx event (ignored)")
+  defp handle_event(repo, %{"type" => "tx"}) do
+    Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: tx event (ignored)")
   end
 
-  defp handle_event(name, event) do
-    Logger.debug("EctoLiteFS.EventStream[#{name}]: unknown event type: #{inspect(event)}")
+  defp handle_event(repo, event) do
+    Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: unknown event type: #{inspect(event)}")
   end
 
-  defp handle_primary_status_change(name, true = _is_primary, event_type, hostname) do
-    Logger.debug("EctoLiteFS.EventStream[#{name}]: #{event_type} event - primary, hostname=#{hostname}")
-    notify_tracker(name, {:set_primary, Node.self()})
+  defp handle_primary_status_change(repo, true = _is_primary, event_type, hostname) do
+    Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: #{event_type} event - primary, hostname=#{hostname}")
+    notify_tracker(repo, {:set_primary, Node.self()})
   end
 
-  defp handle_primary_status_change(name, false = _is_primary, event_type, hostname) do
-    Logger.debug("EctoLiteFS.EventStream[#{name}]: #{event_type} event - replica, hostname=#{hostname}")
-    notify_tracker(name, :set_replica)
+  defp handle_primary_status_change(repo, false = _is_primary, event_type, hostname) do
+    Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: #{event_type} event - replica, hostname=#{hostname}")
+    notify_tracker(repo, :set_replica)
   end
 
-  defp notify_tracker(name, {:set_primary, node}) do
-    if Tracker.ready?(name) do
-      case Tracker.set_primary(name, node) do
+  defp notify_tracker(repo, {:set_primary, node}) do
+    if Tracker.ready?(repo) do
+      case Tracker.set_primary(repo, node) do
         :ok ->
           true
 
         {:error, reason} ->
-          Logger.debug("EctoLiteFS.EventStream[#{name}]: set_primary failed: #{inspect(reason)}")
+          Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: set_primary failed: #{inspect(reason)}")
           false
       end
     else
-      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker not ready, skipping set_primary")
+      Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: tracker not ready, skipping set_primary")
       false
     end
   catch
     :exit, reason ->
-      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker unavailable: #{inspect(reason)}")
+      Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: tracker unavailable: #{inspect(reason)}")
       false
   end
 
-  defp notify_tracker(name, :set_replica) do
-    if Tracker.ready?(name) do
-      case Tracker.set_replica(name) do
+  defp notify_tracker(repo, :set_replica) do
+    if Tracker.ready?(repo) do
+      case Tracker.set_replica(repo) do
         :ok ->
           true
 
         {:error, reason} ->
-          Logger.debug("EctoLiteFS.EventStream[#{name}]: set_replica failed: #{inspect(reason)}")
+          Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: set_replica failed: #{inspect(reason)}")
           false
       end
     else
-      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker not ready, skipping set_replica")
+      Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: tracker not ready, skipping set_replica")
       false
     end
   catch
     :exit, reason ->
-      Logger.debug("EctoLiteFS.EventStream[#{name}]: tracker unavailable: #{inspect(reason)}")
+      Logger.debug("EctoLiteFS.EventStream[#{inspect(repo)}]: tracker unavailable: #{inspect(reason)}")
       false
   end
 end

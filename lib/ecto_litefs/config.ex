@@ -6,8 +6,7 @@ defmodule EctoLiteFS.Config do
 
   ## Configuration Options
 
-  * `:repo` - The Ecto Repo module (required)
-  * `:name` - Unique identifier for this instance (required, atom)
+  * `:repo` - The Ecto Repo module (required, used as the unique identifier)
   * `:primary_file` - Path to LiteFS `.primary` file. Default: `"/litefs/.primary"`
   * `:poll_interval` - Filesystem poll interval in ms. Default: `30_000`
   * `:event_stream_url` - LiteFS HTTP events endpoint. Default: `"http://localhost:20202/events"`
@@ -16,10 +15,9 @@ defmodule EctoLiteFS.Config do
   * `:refresh_grace_period` - Grace period in ms to skip redundant cache refreshes. Default: `100`
   """
 
-  @enforce_keys [:repo, :name]
+  @enforce_keys [:repo]
   defstruct [
     :repo,
-    :name,
     primary_file: "/litefs/.primary",
     poll_interval: 30_000,
     event_stream_url: "http://localhost:20202/events",
@@ -30,7 +28,6 @@ defmodule EctoLiteFS.Config do
 
   @type t :: %__MODULE__{
           repo: module(),
-          name: atom(),
           primary_file: String.t(),
           poll_interval: pos_integer(),
           event_stream_url: String.t(),
@@ -46,8 +43,7 @@ defmodule EctoLiteFS.Config do
 
   ## Required Options
 
-  * `:repo` - The Ecto Repo module
-  * `:name` - Unique identifier for this instance (atom)
+  * `:repo` - The Ecto Repo module (also serves as the unique identifier)
 
   ## Optional Options
 
@@ -60,8 +56,8 @@ defmodule EctoLiteFS.Config do
 
   ## Examples
 
-      iex> EctoLiteFS.Config.new!(repo: MyApp.Repo, name: :my_litefs)
-      %EctoLiteFS.Config{repo: MyApp.Repo, name: :my_litefs, ...}
+      iex> EctoLiteFS.Config.new!(repo: MyApp.Repo)
+      %EctoLiteFS.Config{repo: MyApp.Repo, ...}
 
       iex> EctoLiteFS.Config.new!([])
       ** (ArgumentError) EctoLiteFS.Config requires :repo option
@@ -71,12 +67,12 @@ defmodule EctoLiteFS.Config do
   def new!(opts) when is_list(opts) do
     opts
     |> validate_required!(:repo)
-    |> validate_required!(:name)
     |> validate_atom!(:repo)
-    |> validate_atom!(:name)
     |> validate_positive_integer!(:poll_interval)
     |> validate_positive_integer!(:cache_ttl)
     |> validate_positive_integer!(:refresh_grace_period)
+    |> validate_non_empty_string!(:primary_file)
+    |> validate_non_empty_string!(:event_stream_url)
     |> validate_table_name!()
     |> build_struct()
   end
@@ -104,6 +100,20 @@ defmodule EctoLiteFS.Config do
       {:ok, value} ->
         raise ArgumentError,
               "EctoLiteFS.Config :#{key} must be a positive integer, got: #{inspect(value)}"
+
+      :error ->
+        opts
+    end
+  end
+
+  defp validate_non_empty_string!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when is_binary(value) and value != "" ->
+        opts
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "EctoLiteFS.Config :#{key} must be a non-empty string, got: #{inspect(value)}"
 
       :error ->
         opts

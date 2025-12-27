@@ -6,6 +6,12 @@ defmodule EctoLiteFS.PollerTest do
   alias EctoLiteFS.Config
   alias EctoLiteFS.Poller
 
+  defmodule TestRepo do
+    use Ecto.Repo,
+      otp_app: :ecto_litefs,
+      adapter: Ecto.Adapters.SQLite3
+  end
+
   describe "start_link/1" do
     test "starts the poller with the correct name" do
       {:ok, temp_dir} = Briefly.create(type: :directory)
@@ -14,23 +20,22 @@ defmodule EctoLiteFS.PollerTest do
       config =
         Config.new!(
           repo: TestRepo,
-          name: :poller_test_1,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
       {:ok, pid} = Poller.start_link(config)
       assert Process.alive?(pid)
-      assert Process.whereis(Poller.process_name(:poller_test_1)) == pid
+      assert Process.whereis(Poller.process_name(TestRepo)) == pid
 
       GenServer.stop(pid)
     end
   end
 
   describe "process_name/1" do
-    test "returns module-based name for instance" do
-      assert Poller.process_name(:my_litefs) == :"Elixir.EctoLiteFS.Poller.my_litefs"
-      assert Poller.process_name(:other) == :"Elixir.EctoLiteFS.Poller.other"
+    test "returns module-based name for repo" do
+      assert Poller.process_name(MyApp.Repo) == :"Elixir.EctoLiteFS.Poller.MyApp.Repo"
+      assert Poller.process_name(OtherRepo) == :"Elixir.EctoLiteFS.Poller.OtherRepo"
     end
   end
 
@@ -42,7 +47,6 @@ defmodule EctoLiteFS.PollerTest do
       config =
         Config.new!(
           repo: TestRepo,
-          name: :poller_test_primary,
           primary_file: primary_file,
           poll_interval: 50
         )
@@ -66,7 +70,6 @@ defmodule EctoLiteFS.PollerTest do
       config =
         Config.new!(
           repo: TestRepo,
-          name: :poller_test_replica,
           primary_file: primary_file,
           poll_interval: 50
         )
@@ -88,7 +91,6 @@ defmodule EctoLiteFS.PollerTest do
       config =
         Config.new!(
           repo: TestRepo,
-          name: :poller_test_interval,
           primary_file: primary_file,
           poll_interval: 100
         )
@@ -114,7 +116,6 @@ defmodule EctoLiteFS.PollerTest do
       config =
         Config.new!(
           repo: TestRepo,
-          name: :poller_test_nonexistent,
           primary_file: "/nonexistent/deeply/nested/path/.primary",
           poll_interval: 50
         )

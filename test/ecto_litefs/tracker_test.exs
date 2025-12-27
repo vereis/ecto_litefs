@@ -4,19 +4,17 @@ defmodule EctoLiteFS.TrackerTest do
   describe "start_link/1" do
     test "creates ETS table on init" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:tracker_ets)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      ets_table = Tracker.ets_table_name(name)
+      ets_table = Tracker.ets_table_name(Repo)
       assert :ets.info(ets_table) != :undefined
 
       Supervisor.stop(sup)
@@ -24,19 +22,17 @@ defmodule EctoLiteFS.TrackerTest do
 
     test "ETS table has correct options" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:tracker_ets_opts)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      ets_table = Tracker.ets_table_name(name)
+      ets_table = Tracker.ets_table_name(Repo)
       info = :ets.info(ets_table)
 
       assert Keyword.get(info, :type) == :set
@@ -49,7 +45,6 @@ defmodule EctoLiteFS.TrackerTest do
 
     test "creates DB table if not exists" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:tracker_db_create)
       table_name = unique_table_name("_ecto_litefs_create")
 
       drop_table_if_exists(table_name)
@@ -57,13 +52,12 @@ defmodule EctoLiteFS.TrackerTest do
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
       assert table_exists?(table_name)
 
       Supervisor.stop(sup)
@@ -71,7 +65,6 @@ defmodule EctoLiteFS.TrackerTest do
 
     test "is idempotent - does not fail if DB table already exists" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:tracker_idempotent)
       table_name = unique_table_name("_ecto_litefs_idempotent")
 
       drop_table_if_exists(table_name)
@@ -82,13 +75,12 @@ defmodule EctoLiteFS.TrackerTest do
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
       assert table_exists?(table_name)
 
       Supervisor.stop(sup)
@@ -96,19 +88,17 @@ defmodule EctoLiteFS.TrackerTest do
 
     test "registers itself for repo lookup" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:tracker_registry)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      tracker_pid = EctoLiteFS.get_tracker!(name, Repo)
+      tracker_pid = EctoLiteFS.get_tracker!(Repo)
       assert is_pid(tracker_pid)
       assert Process.alive?(tracker_pid)
 
@@ -117,24 +107,24 @@ defmodule EctoLiteFS.TrackerTest do
   end
 
   describe "process_name/1" do
-    test "returns module-based name for instance" do
-      assert Tracker.process_name(:my_litefs) == :"Elixir.EctoLiteFS.Tracker.my_litefs"
-      assert Tracker.process_name(:other) == :"Elixir.EctoLiteFS.Tracker.other"
+    test "returns module-based name for repo" do
+      assert Tracker.process_name(MyApp.Repo) == :"Elixir.EctoLiteFS.Tracker.MyApp.Repo"
+      assert Tracker.process_name(OtherRepo) == :"Elixir.EctoLiteFS.Tracker.OtherRepo"
     end
   end
 
   describe "ets_table_name/1" do
-    test "returns prefixed atom for instance" do
-      assert Tracker.ets_table_name(:my_litefs) == :ecto_litefs_my_litefs
-      assert Tracker.ets_table_name(:other) == :ecto_litefs_other
+    test "returns repo-based ETS table name" do
+      assert Tracker.ets_table_name(MyApp.Repo) == :"Elixir.EctoLiteFS.MyApp.Repo.ETS"
+      assert Tracker.ets_table_name(OtherRepo) == :"Elixir.EctoLiteFS.OtherRepo.ETS"
     end
   end
 
-  describe "multiple instances" do
-    test "ETS table names are derived from instance name" do
-      assert Tracker.ets_table_name(:instance_a) == :ecto_litefs_instance_a
-      assert Tracker.ets_table_name(:instance_b) == :ecto_litefs_instance_b
-      assert Tracker.ets_table_name(:instance_a) != Tracker.ets_table_name(:instance_b)
+  describe "multiple repos" do
+    test "ETS table names are derived from repo module" do
+      assert Tracker.ets_table_name(RepoA) == :"Elixir.EctoLiteFS.RepoA.ETS"
+      assert Tracker.ets_table_name(RepoB) == :"Elixir.EctoLiteFS.RepoB.ETS"
+      assert Tracker.ets_table_name(RepoA) != Tracker.ets_table_name(RepoB)
     end
 
     test "process names are derived from instance name" do
@@ -143,41 +133,33 @@ defmodule EctoLiteFS.TrackerTest do
   end
 
   describe "duplicate repo registration" do
-    test "second tracker for same repo fails and get_tracker returns first" do
-      Process.flag(:trap_exit, true)
-
+    test "second supervisor for same repo fails to start" do
       {_temp_dir1, primary_file1} = create_temp_primary_file()
       {_temp_dir2, primary_file2} = create_temp_primary_file()
-      name1 = unique_name(:dup_reg_1)
-      name2 = unique_name(:dup_reg_2)
 
       {:ok, sup1} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name1,
           primary_file: primary_file1,
           poll_interval: 60_000,
           table_name: unique_table_name("_dup_1")
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name1) end)
-      first_tracker = EctoLiteFS.get_tracker!(name1, Repo)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
+      first_tracker = EctoLiteFS.get_tracker!(Repo)
 
-      {:ok, sup2} =
-        LiteFSSupervisor.start_link(
-          repo: Repo,
-          name: name2,
-          primary_file: primary_file2,
-          poll_interval: 60_000,
-          table_name: unique_table_name("_dup_2")
-        )
+      # Second supervisor for same repo should fail because process name is already taken
+      assert {:error, {:already_started, _pid}} =
+               LiteFSSupervisor.start_link(
+                 repo: Repo,
+                 primary_file: primary_file2,
+                 poll_interval: 60_000,
+                 table_name: unique_table_name("_dup_2")
+               )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name2) end)
+      # First tracker is still running
+      assert EctoLiteFS.get_tracker!(Repo) == first_tracker
 
-      assert EctoLiteFS.get_tracker!(name1, Repo) == first_tracker
-      assert EctoLiteFS.get_tracker!(name2, Repo) != first_tracker
-
-      Supervisor.stop(sup2)
       Supervisor.stop(sup1)
     end
   end
@@ -185,19 +167,17 @@ defmodule EctoLiteFS.TrackerTest do
   describe "ETS table cleanup" do
     test "ETS table is deleted when tracker stops" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:tracker_cleanup)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      ets_table = Tracker.ets_table_name(name)
+      ets_table = Tracker.ets_table_name(Repo)
       assert :ets.info(ets_table) != :undefined
 
       Supervisor.stop(sup)
@@ -211,7 +191,6 @@ defmodule EctoLiteFS.TrackerTest do
       assert_raise ArgumentError, ~r/must be a valid SQL identifier/, fn ->
         Config.new!(
           repo: Repo,
-          name: :sql_injection_test,
           table_name: "foo; DROP TABLE users; --"
         )
       end
@@ -221,7 +200,6 @@ defmodule EctoLiteFS.TrackerTest do
       config =
         Config.new!(
           repo: Repo,
-          name: :valid_table_test,
           table_name: "_my_valid_table_123"
         )
 
@@ -232,21 +210,19 @@ defmodule EctoLiteFS.TrackerTest do
   describe "set_primary/2" do
     test "writes correct data to DB" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:set_primary_db)
       table_name = unique_table_name("_set_primary")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      assert :ok = Tracker.set_primary(name, :test_node@host)
+      assert :ok = Tracker.set_primary(Repo, :test_node@host)
 
       {:ok, result} = Repo.query("SELECT node_name FROM #{table_name} WHERE id = 1")
       assert result.rows == [["test_node@host"]]
@@ -256,21 +232,19 @@ defmodule EctoLiteFS.TrackerTest do
 
     test "updates ETS cache correctly" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:set_primary_ets)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      assert :ok = Tracker.set_primary(name, :test_node@host)
+      assert :ok = Tracker.set_primary(Repo, :test_node@host)
 
-      ets_table = Tracker.ets_table_name(name)
+      ets_table = Tracker.ets_table_name(Repo)
       [{:primary_info, node, _cached_at, _ttl}] = :ets.lookup(ets_table, :primary_info)
       assert node == :test_node@host
 
@@ -281,99 +255,91 @@ defmodule EctoLiteFS.TrackerTest do
   describe "get_primary/1" do
     test "returns cached value when fresh" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:get_primary_cached)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           cache_ttl: 10_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      Tracker.set_primary(name, :cached_node@host)
+      Tracker.set_primary(Repo, :cached_node@host)
 
-      assert {:ok, :cached_node@host} = Tracker.get_primary(name)
+      assert {:ok, :cached_node@host} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
 
     test "reads directly from ETS cache when fresh" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:get_primary_ets)
       table_name = unique_table_name("_get_primary_ets")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name,
           cache_ttl: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      Tracker.set_primary(name, :old_node@host)
+      Tracker.set_primary(Repo, :old_node@host)
 
       Repo.query!("UPDATE #{table_name} SET node_name = 'new_node@host' WHERE id = 1")
 
       # Cache is fresh, so returns cached value
-      assert {:ok, :old_node@host} = Tracker.get_primary(name)
+      assert {:ok, :old_node@host} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
 
     test "refreshes from DB when cache is stale" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:get_primary_stale)
       table_name = unique_table_name("_get_primary_stale")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name,
           cache_ttl: 1
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       current_node = Node.self()
-      Tracker.set_primary(name, current_node)
+      Tracker.set_primary(Repo, current_node)
 
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
       Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
       Process.sleep(10)
 
-      assert {:ok, nil} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
 
     test "returns nil when no primary recorded" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:get_primary_nil)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      assert {:ok, nil} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
@@ -382,61 +348,55 @@ defmodule EctoLiteFS.TrackerTest do
   describe "is_primary?/1" do
     test "returns true when current node is primary" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:is_primary_true)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      Tracker.set_primary(name, Node.self())
+      Tracker.set_primary(Repo, Node.self())
 
-      assert Tracker.is_primary?(name) == true
+      assert Tracker.is_primary?(Repo) == true
 
       Supervisor.stop(sup)
     end
 
     test "returns false when different node is primary" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:is_primary_false)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      Tracker.set_primary(name, :other_node@host)
+      Tracker.set_primary(Repo, :other_node@host)
 
-      assert Tracker.is_primary?(name) == false
+      assert Tracker.is_primary?(Repo) == false
 
       Supervisor.stop(sup)
     end
 
     test "returns false when no primary recorded" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:is_primary_nil)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      assert Tracker.is_primary?(name) == false
+      assert Tracker.is_primary?(Repo) == false
 
       Supervisor.stop(sup)
     end
@@ -445,31 +405,29 @@ defmodule EctoLiteFS.TrackerTest do
   describe "invalidate_cache/1" do
     test "clears ETS cache forcing DB refresh on next read" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:invalidate_cache)
       table_name = unique_table_name("_invalidate_cache")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       current_node = Node.self()
-      Tracker.set_primary(name, current_node)
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      Tracker.set_primary(Repo, current_node)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
       Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
-      Tracker.invalidate_cache(name)
+      Tracker.invalidate_cache(Repo)
 
-      assert {:ok, nil} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
@@ -478,59 +436,55 @@ defmodule EctoLiteFS.TrackerTest do
   describe "set_replica/1" do
     test "refreshes cache from DB" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:set_replica)
       table_name = unique_table_name("_set_replica")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       current_node = Node.self()
-      Tracker.set_primary(name, current_node)
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      Tracker.set_primary(Repo, current_node)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
       Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
-      Tracker.set_replica(name)
+      Tracker.set_replica(Repo)
 
-      assert {:ok, nil} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
 
     test "clears cache when no primary in DB" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:set_replica_nil)
       table_name = unique_table_name("_set_replica_nil")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
-      Tracker.set_primary(name, :old_node@host)
-      assert {:ok, :old_node@host} = Tracker.get_primary(name)
+      Tracker.set_primary(Repo, :old_node@host)
+      assert {:ok, :old_node@host} = Tracker.get_primary(Repo)
 
       Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      Tracker.set_replica(name)
+      Tracker.set_replica(Repo)
 
-      assert {:ok, nil} = Tracker.get_primary(name)
+      assert {:ok, nil} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
@@ -539,22 +493,20 @@ defmodule EctoLiteFS.TrackerTest do
   describe "Poller integration" do
     test "Poller detection triggers Tracker update" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:poller_integration)
 
       File.rm(primary_file)
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 50
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       eventually(fn ->
-        assert {:ok, Node.self()} == Tracker.get_primary(name)
+        assert {:ok, Node.self()} == Tracker.get_primary(Repo)
       end)
 
       Supervisor.stop(sup)
@@ -563,33 +515,31 @@ defmodule EctoLiteFS.TrackerTest do
     test "Poller invalidates cache when becoming replica" do
       {:ok, temp_dir} = Briefly.create(type: :directory)
       primary_file = Path.join(temp_dir, ".primary")
-      name = unique_name(:poller_replica)
       table_name = unique_table_name("_poller_replica")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 50,
           cache_ttl: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       eventually(fn ->
-        assert Tracker.is_primary?(name) == true
+        assert Tracker.is_primary?(Repo) == true
       end)
 
       Repo.query!("UPDATE #{table_name} SET node_name = 'other_node@host' WHERE id = 1")
 
-      assert Tracker.is_primary?(name) == true
+      assert Tracker.is_primary?(Repo) == true
 
       File.write!(primary_file, "other-node")
 
       eventually(fn ->
-        assert Tracker.is_primary?(name) == false
+        assert Tracker.is_primary?(Repo) == false
       end)
 
       Supervisor.stop(sup)
@@ -599,50 +549,46 @@ defmodule EctoLiteFS.TrackerTest do
   describe "atom safety in refresh_cache_from_db" do
     test "rejects node names not in connected nodes" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:atom_safety)
       table_name = unique_table_name("_atom_safety")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       Repo.query!("INSERT INTO #{table_name} (id, node_name, updated_at) VALUES (1, 'fake_node@invalid', 0)")
 
-      Tracker.invalidate_cache(name)
-      assert {:ok, nil} = Tracker.get_primary(name)
+      Tracker.invalidate_cache(Repo)
+      assert {:ok, nil} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
 
     test "accepts node names from connected nodes" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:atom_safety_ok)
       table_name = unique_table_name("_atom_safety_ok")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       node_name = Atom.to_string(Node.self())
       Repo.query!("INSERT INTO #{table_name} (id, node_name, updated_at) VALUES (1, ?, 0)", [node_name])
 
-      Tracker.invalidate_cache(name)
+      Tracker.invalidate_cache(Repo)
       current_node = Node.self()
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
       Supervisor.stop(sup)
     end
@@ -651,33 +597,31 @@ defmodule EctoLiteFS.TrackerTest do
   describe "refresh grace period" do
     test "normal refresh respects grace period but force refresh bypasses it" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:grace_period)
       table_name = unique_table_name("_grace_period")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name,
           refresh_grace_period: 500
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       current_node = Node.self()
-      Tracker.set_primary(name, current_node)
+      Tracker.set_primary(Repo, current_node)
 
-      Tracker.invalidate_cache(name)
+      Tracker.invalidate_cache(Repo)
 
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
       Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
-      assert {:ok, nil} = Tracker.get_primary(name, force: true)
+      assert {:ok, nil} = Tracker.get_primary(Repo, force: true)
 
       Supervisor.stop(sup)
     end
@@ -686,30 +630,28 @@ defmodule EctoLiteFS.TrackerTest do
   describe "get_primary with force option" do
     test "force: true bypasses cache" do
       {_temp_dir, primary_file} = create_temp_primary_file()
-      name = unique_name(:force_refresh)
       table_name = unique_table_name("_force_refresh")
 
       {:ok, sup} =
         LiteFSSupervisor.start_link(
           repo: Repo,
-          name: name,
           primary_file: primary_file,
           poll_interval: 60_000,
           table_name: table_name,
           cache_ttl: 60_000
         )
 
-      eventually(fn -> assert EctoLiteFS.tracker_ready?(name) end)
+      eventually(fn -> assert EctoLiteFS.tracker_ready?(Repo) end)
 
       current_node = Node.self()
-      Tracker.set_primary(name, current_node)
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      Tracker.set_primary(Repo, current_node)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
       Repo.query!("DELETE FROM #{table_name} WHERE id = 1")
 
-      assert {:ok, ^current_node} = Tracker.get_primary(name)
+      assert {:ok, ^current_node} = Tracker.get_primary(Repo)
 
-      assert {:ok, nil} = Tracker.get_primary(name, force: true)
+      assert {:ok, nil} = Tracker.get_primary(Repo, force: true)
 
       Supervisor.stop(sup)
     end
