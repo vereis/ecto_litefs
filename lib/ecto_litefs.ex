@@ -13,7 +13,6 @@ defmodule EctoLiteFS do
       children = [
         MyApp.Repo,
         {EctoLiteFS.Supervisor,
-          name: :my_litefs,
           repo: MyApp.Repo,
           primary_file: "/litefs/.primary",
           poll_interval: 30_000,
@@ -23,65 +22,99 @@ defmodule EctoLiteFS do
 
   ## Configuration Options
 
-  * `:name` - Required. Unique identifier for this EctoLiteFS instance.
-  * `:repo` - Required. The Ecto Repo module to track.
+  * `:repo` - Required. The Ecto Repo module to track (also serves as the unique identifier).
   * `:primary_file` - Path to LiteFS `.primary` file. Default: `"/litefs/.primary"`
   * `:poll_interval` - Filesystem poll interval in ms. Default: `30_000`
   * `:event_stream_url` - LiteFS HTTP events endpoint. Default: `"http://localhost:20202/events"`
   * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
   * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
+  * `:erpc_timeout` - Timeout for `:erpc` calls when forwarding writes. Default: `30_000`
   """
 
   alias EctoLiteFS.Tracker
 
   @doc """
-  Returns the registry name for a given instance name.
-  """
-  @spec registry_name(atom()) :: atom()
-  def registry_name(name) when is_atom(name) do
-    Module.concat([__MODULE__, name, Registry])
-  end
-
-  @doc """
-  Returns the Tracker pid for the given instance name and repo module.
+  Returns the Tracker pid for the given repo module.
 
   Raises `ArgumentError` if:
-  - The EctoLiteFS instance is not running (supervisor not started)
-  - No Tracker is registered for the given Repo in that instance
+  - The EctoLiteFS supervisor for this repo is not running
+  - No Tracker is registered for the given Repo
 
   ## Examples
 
-      iex> EctoLiteFS.get_tracker!(:my_litefs, MyApp.Repo)
+      iex> EctoLiteFS.get_tracker!(MyApp.Repo)
       #PID<0.123.0>
 
-      iex> EctoLiteFS.get_tracker!(:unknown, MyApp.Repo)
-      ** (ArgumentError) unknown registry: Elixir.EctoLiteFS.unknown.Registry
-
-      iex> EctoLiteFS.get_tracker!(:my_litefs, UnregisteredRepo)
-      ** (ArgumentError) no EctoLiteFS tracker registered for UnregisteredRepo in instance :my_litefs
+      iex> EctoLiteFS.get_tracker!(UnregisteredRepo)
+      ** (ArgumentError) no EctoLiteFS tracker registered for UnregisteredRepo
 
   """
-  @spec get_tracker!(atom(), module()) :: pid()
-  def get_tracker!(instance_name, repo) when is_atom(instance_name) and is_atom(repo) do
-    registry = registry_name(instance_name)
-
-    case Registry.lookup(registry, repo) do
-      [{pid, _value}] ->
-        pid
-
-      [] ->
+  @spec get_tracker!(module()) :: pid()
+  def get_tracker!(repo) when is_atom(repo) do
+    case Process.whereis(Tracker.process_name(repo)) do
+      nil ->
         raise ArgumentError,
-              "no EctoLiteFS tracker registered for #{inspect(repo)} in instance #{inspect(instance_name)}"
+              "no EctoLiteFS tracker registered for #{inspect(repo)}"
+
+      pid ->
+        pid
     end
   end
 
   @doc """
-  Checks if the Tracker for the given instance has completed initialization.
+  Checks if the Tracker for the given repo has completed initialization.
 
   Returns `true` if the tracker is ready, `false` otherwise.
   """
-  @spec tracker_ready?(atom()) :: boolean()
-  def tracker_ready?(instance_name) when is_atom(instance_name) do
-    Tracker.ready?(instance_name)
+  @spec tracker_ready?(module()) :: boolean()
+  def tracker_ready?(repo) when is_atom(repo) do
+    Tracker.ready?(repo)
   end
+
+  @doc """
+  Returns `true` if the current node is the primary for the given repo.
+
+  Delegates to `EctoLiteFS.Tracker.is_primary?/1`.
+  """
+  @spec is_primary?(module()) :: boolean()
+  defdelegate is_primary?(repo), to: Tracker
+
+  @doc """
+  Gets the current primary node from cache, refreshing from DB if stale.
+
+  Delegates to `EctoLiteFS.Tracker.get_primary/1`.
+
+  Returns `{:ok, node}` if a primary is known, `{:ok, nil}` if no primary
+  has been recorded, or `{:error, :not_ready}` if tracker isn't initialized.
+  """
+  @spec get_primary(module()) :: {:ok, node() | nil} | {:error, term()}
+  defdelegate get_primary(repo), to: Tracker
+
+  @doc """
+  Sets the current node as primary, writing to DB and updating cache.
+
+  Delegates to `EctoLiteFS.Tracker.set_primary/2`.
+
+  Returns `:ok` on success, `{:error, reason}` on failure.
+  """
+  @spec set_primary(module(), node()) :: :ok | {:error, term()}
+  defdelegate set_primary(repo, node), to: Tracker
+
+  @doc """
+  Notifies the Tracker that this node is now a replica.
+
+  Delegates to `EctoLiteFS.Tracker.set_replica/1`.
+
+  Returns `:ok` on success, `{:error, reason}` on failure.
+  """
+  @spec set_replica(module()) :: :ok | {:error, term()}
+  defdelegate set_replica(repo), to: Tracker
+
+  @doc """
+  Invalidates the cache, clearing any cached primary info.
+
+  Delegates to `EctoLiteFS.Tracker.invalidate_cache/1`.
+  """
+  @spec invalidate_cache(module()) :: :ok
+  defdelegate invalidate_cache(repo), to: Tracker
 end
