@@ -45,6 +45,7 @@ defmodule EctoLiteFS.MixProject do
       # Runtime dependencies
       {:ecto_sql, "~> 3.11"},
       {:ecto_sqlite3, "~> 0.17"},
+      {:ecto_middleware, "~> 2.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
 

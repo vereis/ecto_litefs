@@ -13,6 +13,7 @@ defmodule EctoLiteFS.Config do
   * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
   * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
   * `:refresh_grace_period` - Grace period in ms to skip redundant cache refreshes. Default: `100`
+  * `:erpc_timeout` - Timeout for `:erpc` calls when forwarding writes to primary. Default: `15_000`
   """
 
   @enforce_keys [:repo]
@@ -23,7 +24,8 @@ defmodule EctoLiteFS.Config do
     event_stream_url: "http://localhost:20202/events",
     table_name: "_ecto_litefs_primary",
     cache_ttl: 5_000,
-    refresh_grace_period: 100
+    refresh_grace_period: 100,
+    erpc_timeout: 15_000
   ]
 
   @type t :: %__MODULE__{
@@ -33,7 +35,8 @@ defmodule EctoLiteFS.Config do
           event_stream_url: String.t(),
           table_name: String.t(),
           cache_ttl: pos_integer(),
-          refresh_grace_period: pos_integer()
+          refresh_grace_period: pos_integer(),
+          erpc_timeout: pos_integer()
         }
 
   @doc """
@@ -53,6 +56,7 @@ defmodule EctoLiteFS.Config do
   * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
   * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
   * `:refresh_grace_period` - Grace period in ms to skip redundant cache refreshes. Default: `100`
+  * `:erpc_timeout` - Timeout for `:erpc` calls when forwarding writes to primary. Default: `15_000`
 
   ## Examples
 
@@ -71,6 +75,7 @@ defmodule EctoLiteFS.Config do
     |> validate_positive_integer!(:poll_interval)
     |> validate_positive_integer!(:cache_ttl)
     |> validate_positive_integer!(:refresh_grace_period)
+    |> validate_positive_integer!(:erpc_timeout)
     |> validate_non_empty_string!(:primary_file)
     |> validate_non_empty_string!(:event_stream_url)
     |> validate_table_name!()
