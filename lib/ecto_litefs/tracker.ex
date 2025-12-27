@@ -177,6 +177,19 @@ defmodule EctoLiteFS.Tracker do
     GenServer.call(process_name(repo), :invalidate_cache)
   end
 
+  @doc """
+  Returns the configured erpc_timeout for the given repo.
+
+  Reads directly from ETS for performance.
+  """
+  @spec get_erpc_timeout(module()) :: pos_integer()
+  def get_erpc_timeout(repo) when is_atom(repo) do
+    case :ets.lookup(ets_table_name(repo), :erpc_timeout) do
+      [{:erpc_timeout, timeout}] -> timeout
+      [] -> 15_000
+    end
+  end
+
   @impl GenServer
   def init(%Config{} = config) do
     {:ok,
@@ -194,6 +207,7 @@ defmodule EctoLiteFS.Tracker do
     case try_init_db(state.config) do
       :ok ->
         ets_table = :ets.new(ets_table_name(state.config.repo), [:named_table, :public, :set, read_concurrency: true])
+        :ets.insert(ets_table, {:erpc_timeout, state.config.erpc_timeout})
         {:noreply, %{state | ets_table: ets_table, db_ready: true}}
 
       {:error, reason} ->
