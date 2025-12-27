@@ -7,4 +7,7 @@ Application.ensure_all_started(:briefly)
 
 Sandbox.mode(Repo, :manual)
 
+# Setup Mimic for mocking RPC calls in middleware tests
+Mimic.copy(EctoLiteFS.RPC)
+
 ExUnit.start()
