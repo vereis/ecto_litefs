@@ -4,7 +4,12 @@
 
 # EctoLiteFS
 
-LiteFS-aware Ecto middleware for automatic write forwarding in distributed SQLite clusters.
+[![Hex Version](https://img.shields.io/hexpm/v/ecto_litefs.svg)](https://hex.pm/packages/ecto_litefs)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/ecto_litefs/)
+[![CI Status](https://github.com/vereis/ecto_litefs/workflows/CI/badge.svg)](https://github.com/vereis/ecto_litefs/actions)
+[![Coverage Status](https://coveralls.io/repos/github/vereis/ecto_litefs/badge.svg?branch=master)](https://coveralls.io/github/vereis/ecto_litefs?branch=master)
+
+> LiteFS-aware Ecto middleware for automatic write forwarding in distributed SQLite clusters.
 
 EctoLiteFS detects which node is the current LiteFS primary and automatically forwards
 write operations to it, allowing replicas to handle reads locally while writes are
@@ -129,20 +134,20 @@ of these can be disabled if desired.
 ### Architecture
 
 ```
-┌─────────────────────┐         ┌─────────────────────┐
-│   Primary Node      │         │   Replica Node      │
-│                     │         │                     │
-│  ┌──────────────┐   │         │  ┌──────────────┐   │
-│  │ Repo.insert  │   │  :erpc  │  │ Repo.insert  │───┼──┐
-│  └──────┬───────┘   │ ◄───────┼──│   (forwarded)│   │  │
-│         │           │         │  └──────────────┘   │  │
-│    ┌────▼────┐      │         │                     │  │
-│    │ SQLite  │◄─────┼─────────┼─► Reads happen      │  │
-│    │ (write) │      │ replicate│   locally          │  │
-│    └─────────┘      │         │                     │  │
-└─────────────────────┘         └─────────────────────┘  │
-                                                         │
-                    Middleware detects write ────────────┘
+┌─────────────────────┐          ┌─────────────────────┐
+│   Primary Node      │          │   Replica Node      │
+│                     │          │                     │
+│  ┌──────────────┐   │          │  ┌──────────────┐   │
+│  │ Repo.insert  │   │  :erpc   │  │ Repo.insert  │───┼──┐
+│  └──────┬───────┘   │ ◄────────┼──│   (forwarded)│   │  │
+│         │           │          │  └──────────────┘   │  │
+│    ┌────▼────┐      │          │                     │  │
+│    │ SQLite  │◄─────┼──────────┼─► Reads happen      │  │
+│    │ (write) │      │ replicate│   locally           │  │
+│    └─────────┘      │          │                     │  │
+└─────────────────────┘          └─────────────────────┘  │
+                                                          │
+                    Middleware detects write ─────────────┘
                     and forwards to primary
 ```
 
@@ -220,10 +225,10 @@ Test scenarios:
 
 ## Similar Projects
 
-- **[litefs](https://hex.pm/packages/litefs)** - The original LiteFS library for Elixir by [@sheertj](https://git.sr.ht/~sheertj). 
-  Uses a repo wrapper approach where you rename your repo to `MyApp.Repo.Local` and create a new 
-  `MyApp.Repo` that proxies writes, and relies on filesystem polling only. EctoLiteFS differs by 
-  using middleware instead (so your existing repo stays unchanged), and adds HTTP event streaming 
+- **[litefs](https://hex.pm/packages/litefs)** - The original LiteFS library for Elixir by [@sheertj](https://git.sr.ht/~sheertj).
+  Uses a repo wrapper approach where you rename your repo to `MyApp.Repo.Local` and create a new
+  `MyApp.Repo` that proxies writes, and relies on filesystem polling only. EctoLiteFS differs by
+  using middleware instead (so your existing repo stays unchanged), and adds HTTP event streaming
   for faster primary detection.
 
 ## License
