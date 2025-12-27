@@ -1,0 +1,90 @@
+services:
+  consul:
+    image: consul:1.15
+    hostname: consul
+    ports:
+      - "8500:8500"
+    networks:
+      - litefs_net
+    command: agent -dev -client=0.0.0.0
+
+  primary:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    hostname: primary
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    ports:
+      - "4001:4000"
+      - "20202:20202"
+    environment:
+      NODE_NAME: primary@primary
+      PRIMARY_NODE: primary@primary
+      ERLANG_COOKIE: ecto_litefs_e2e_cookie
+      IS_PRIMARY: "true"
+      PRIMARY_HOST: primary
+      DATABASE_PATH: /litefs/test.db
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+    volumes:
+      - ./config/litefs.primary.yml:/etc/litefs.yml:ro
+      - primary_data:/var/lib/litefs
+    networks:
+      - litefs_net
+    depends_on:
+      - consul
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  replica:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    hostname: replica
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    ports:
+      - "4002:4000"
+      - "20203:20202"
+    environment:
+      NODE_NAME: replica@replica
+      PRIMARY_NODE: primary@primary
+      ERLANG_COOKIE: ecto_litefs_e2e_cookie
+      IS_PRIMARY: "false"
+      PRIMARY_HOST: primary
+      DATABASE_PATH: /litefs/test.db
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+    volumes:
+      - ./config/litefs.replica.yml:/etc/litefs.yml:ro
+      - replica_data:/var/lib/litefs
+    networks:
+      - litefs_net
+    depends_on:
+      consul:
+        condition: service_started
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  primary_data:
+  replica_data:
+
+networks:
+  litefs_net:
+    driver: bridge

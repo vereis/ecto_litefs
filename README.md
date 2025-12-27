@@ -26,7 +26,6 @@ Add the supervisor to your application's supervision tree, after your Repo:
 children = [
   MyApp.Repo,
   {EctoLiteFS.Supervisor,
-    name: :my_litefs,
     repo: MyApp.Repo,
     primary_file: "/litefs/.primary",
     poll_interval: 30_000,
@@ -37,13 +36,13 @@ children = [
 
 ## Configuration Options
 
-* `:name` - Required. Unique identifier for this EctoLiteFS instance.
 * `:repo` - Required. The Ecto Repo module to track.
 * `:primary_file` - Path to LiteFS `.primary` file. Default: `"/litefs/.primary"`
 * `:poll_interval` - Filesystem poll interval in ms. Default: `30_000`
 * `:event_stream_url` - LiteFS HTTP events endpoint. Default: `"http://localhost:20202/events"`
 * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
 * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
+* `:erpc_timeout` - Timeout for RPC calls to primary. Default: `15_000`
 
 ## How It Works
 
@@ -55,6 +54,35 @@ EctoLiteFS uses multiple detection methods to determine primary status:
 
 When a write operation is detected on a replica node, it's automatically forwarded
 to the primary node via `:erpc.call/4`.
+
+## Testing
+
+### Unit Tests
+
+```bash
+mix test
+```
+
+### End-to-End Tests
+
+The E2E test suite validates the full LiteFS cluster behavior including write forwarding
+and automatic failover. It requires Docker with privileged mode (for FUSE filesystem).
+
+```bash
+cd e2e
+./run_tests.sh
+```
+
+The E2E tests spin up a Docker Compose cluster with:
+- **Consul** - Leader election coordinator
+- **Primary node** - LiteFS primary with Elixir app
+- **Replica node** - LiteFS replica with Elixir app
+
+Test scenarios:
+1. Cluster status verification
+2. Write to primary, replicate to replica
+3. Write forwarding from replica to primary
+4. Primary failover - replica promoted, data preserved
 
 ## License
 
