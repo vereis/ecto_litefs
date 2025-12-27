@@ -28,7 +28,7 @@ defmodule EctoLiteFS do
   * `:event_stream_url` - LiteFS HTTP events endpoint. Default: `"http://localhost:20202/events"`
   * `:table_name` - Database table for primary tracking. Default: `"_ecto_litefs_primary"`
   * `:cache_ttl` - Cache TTL in ms. Default: `5_000`
-  * `:erpc_timeout` - Timeout for `:erpc` calls when forwarding writes. Default: `30_000`
+  * `:erpc_timeout` - Timeout for `:erpc` calls when forwarding writes to primary. Default: `15_000`
   """
 
   alias EctoLiteFS.Tracker
@@ -117,4 +117,12 @@ defmodule EctoLiteFS do
   """
   @spec invalidate_cache(module()) :: :ok
   defdelegate invalidate_cache(repo), to: Tracker
+
+  @doc """
+  Returns the configured erpc_timeout for the given repo.
+
+  Delegates to `EctoLiteFS.Tracker.get_erpc_timeout/1`.
+  """
+  @spec get_erpc_timeout(module()) :: pos_integer()
+  defdelegate get_erpc_timeout(repo), to: Tracker
 end
