@@ -7,8 +7,9 @@ defmodule EctoLiteFS.Supervisor do
       children = [
         MyApp.Repo,
         {EctoLiteFS.Supervisor,
-          name: :my_litefs,
-          repo: MyApp.Repo
+          repo: MyApp.Repo,
+          primary_file: "/litefs/.primary",
+          poll_interval: 30_000
         }
       ]
 
@@ -30,21 +31,20 @@ defmodule EctoLiteFS.Supervisor do
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) when is_list(opts) do
     config = Config.new!(opts)
-    Supervisor.start_link(__MODULE__, config, name: supervisor_name(config.name))
+    Supervisor.start_link(__MODULE__, config, name: supervisor_name(config.repo))
   end
 
   @doc """
-  Returns the supervisor name for a given instance name.
+  Returns the supervisor name for a given repo module.
   """
-  @spec supervisor_name(atom()) :: atom()
-  def supervisor_name(name) when is_atom(name) do
-    Module.concat(__MODULE__, name)
+  @spec supervisor_name(module()) :: atom()
+  def supervisor_name(repo) when is_atom(repo) do
+    Module.concat(__MODULE__, repo)
   end
 
   @impl Supervisor
   def init(%Config{} = config) do
     children = [
-      {Registry, keys: :unique, name: EctoLiteFS.registry_name(config.name)},
       {Tracker, config},
       {Poller, config},
       {EventStream, config}
