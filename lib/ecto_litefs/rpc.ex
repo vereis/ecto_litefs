@@ -18,6 +18,7 @@ defmodule EctoLiteFS.RPC do
     - The result of the function execution
     - Raises :erpc exceptions on timeout, noconnection, etc.
   """
+  @spec call(node(), (-> term()), pos_integer()) :: term()
   def call(node, fun, timeout) do
     :erpc.call(node, fun, timeout)
   end
