@@ -38,12 +38,23 @@ defmodule EctoLiteFS.Middleware do
 
   All events include metadata: `%{repo: repo, action: action, primary_node: node}`
 
+  ## Development & Test Mode
+
+  When `EctoLiteFS.Supervisor` is not started (e.g., in dev/test), the middleware
+  automatically passes through to local execution. This means you can add the
+  middleware to your Repo and it will "just work" in all environments:
+
+  - **Production (with LiteFS):** Forwards writes to primary node
+  - **Development/Test (no LiteFS):** Executes writes locally
+
+  A debug log is emitted when passing through, so you can verify your production
+  setup is correctly configured.
+
   ## Error Handling
 
-  - `{:error, :primary_unavailable}` - No primary node is known
+  - `{:error, :primary_unavailable}` - No primary node is known (cluster may be initializing)
   - `{:error, {:erpc, :timeout, node}}` - RPC call timed out (note: the write may still complete on the primary)
   - `{:error, {:erpc, :noconnection, node}}` - Primary node is unreachable
-  - `{:error, :not_ready}` - EctoLiteFS tracker is not initialized
 
   > #### Timeout Warning {: .warning}
   >
@@ -72,6 +83,12 @@ defmodule EctoLiteFS.Middleware do
 
         {:ok, primary_node} ->
           execute_on_primary(repo, original_super, res_resource, res, primary_node)
+
+        {:error, :not_ready} ->
+          require Logger
+
+          Logger.debug("EctoLiteFS.Middleware[#{inspect(repo)}]: not configured, passing through")
+          original_super.(res_resource, res)
 
         {:error, reason} ->
           {:error, reason}
