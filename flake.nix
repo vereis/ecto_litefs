@@ -12,7 +12,7 @@
         in
         with pkgs; {
           devShells.default = mkShell {
-            buildInputs = [ elixir erlang inotify-tools ];
+            buildInputs = [ elixir erlang inotify-tools docker-compose jq curl ];
 
             shellHook = ''
               export ERL_AFLAGS="-kernel shell_history enabled"
