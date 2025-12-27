@@ -115,7 +115,7 @@ defmodule EctoLiteFS.Middleware do
 
     try do
       result =
-        :erpc.call(
+        EctoLiteFS.RPC.call(
           primary_node,
           fn -> original_super.(resource, res) end,
           EctoLiteFS.get_erpc_timeout(repo)

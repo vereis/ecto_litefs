@@ -56,6 +56,7 @@ defmodule EctoLiteFS.MixProject do
 
       # Test dependencies
       {:briefly, "~> 0.5", only: :test},
+      {:mimic, "~> 2.2", only: :test},
       {:mix_test_watch, "~> 1.1", only: :test, runtime: false},
       {:excoveralls, "~> 0.18", only: :test, runtime: false},
 
