@@ -63,14 +63,18 @@ defmodule EctoLiteFS.Middleware do
     repo = resolution.repo
 
     forwarding_super = fn res_resource, res ->
-      if EctoLiteFS.is_primary?(repo) do
-        original_super.(res_resource, res)
-      else
-        case EctoLiteFS.get_primary(repo) do
-          {:ok, nil} -> {:error, :primary_unavailable}
-          {:ok, primary_node} -> execute_on_primary(repo, original_super, res_resource, res, primary_node)
-          {:error, reason} -> {:error, reason}
-        end
+      case EctoLiteFS.get_primary(repo) do
+        {:ok, primary_node} when primary_node == node() ->
+          original_super.(res_resource, res)
+
+        {:ok, nil} ->
+          {:error, :primary_unavailable}
+
+        {:ok, primary_node} ->
+          execute_on_primary(repo, original_super, res_resource, res, primary_node)
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
 
